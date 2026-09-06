@@ -16,8 +16,23 @@ export const app = express();
 
 app.use(
     cors({
-        origin: env.nodeEnv === "production" ? env.allowedOrigins : true,
+        origin: (origin, callback) => {
+            if (!origin) return callback(null, true);
+            const normalized = origin.replace(/\/$/, "");
+            if (
+                env.nodeEnv !== "production" ||
+                env.allowedOrigins.includes(normalized) ||
+                env.allowedOrigins.includes(origin) ||
+                normalized.includes("localhost") ||
+                normalized.includes("127.0.0.1")
+            ) {
+                return callback(null, true);
+            }
+            return callback(null, false);
+        },
         credentials: true,
+        methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
     })
 );
 

@@ -1,11 +1,22 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-const parseOrigins = (value) =>
-    (value || ",https://salmon-spoonbill-632915.hostingersite.com")
+const parseOrigins = (value) => {
+    const defaultOrigins = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "https://rosybrown-sardine-128713.hostingersite.com",
+        "https://salmon-spoonbill-632915.hostingersite.com",
+    ];
+    const cleaned = String(value || "").replace(/^["']|["']$/g, "");
+    const parsed = cleaned
         .split(",")
-        .map((origin) => origin.trim())
+        .map((origin) => origin.trim().replace(/\/$/, ""))
         .filter(Boolean);
+    return [...new Set([...defaultOrigins, ...parsed])];
+};
 
 const parseList = (value) =>
     String(value || "")
