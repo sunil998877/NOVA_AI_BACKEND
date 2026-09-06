@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor and IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+.nyc_output/
+
+# Optional REPL history
+.node_repl_history
+
+# TypeScript / JavaScript
+*.js.map
+
+# Vercel / Netlify / Serverless
+.vercel
+.netlify
+.serverless/
+
+# Types
+typings/
+
+# Documentation
+# If you generate docs, you might want to ignore them
+# docs/
