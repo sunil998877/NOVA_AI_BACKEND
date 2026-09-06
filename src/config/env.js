@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const parseOrigins = (value) =>
-    (value || "http://localhost:5173,http://localhost:3000,http://127.0.0.1:3000,https://novaaisoft.netlify.app")
+    (value || ",https://salmon-spoonbill-632915.hostingersite.com")
         .split(",")
         .map((origin) => origin.trim())
         .filter(Boolean);
