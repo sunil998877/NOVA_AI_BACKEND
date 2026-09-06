@@ -7,7 +7,6 @@ const parseOrigins = (value) => {
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        "https://rosybrown-sardine-128713.hostingersite.com",
         "https://salmon-spoonbill-632915.hostingersite.com",
     ];
     const cleaned = String(value || "").replace(/^["']|["']$/g, "");
