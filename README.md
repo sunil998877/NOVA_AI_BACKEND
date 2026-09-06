@@ -7,7 +7,7 @@ This repo is the backend only. The frontend (Dashboard, Message Crafter, Find In
 ## What it does
 
 1. User signs up or signs in (**email/password** or **Google Auth**)
-2. User data is stored in **MongoDB**
+2. User data is stored in **MySQL**
 3. User creates a **campaign** (name, sender mailbox, schedule)
 4. NOVA (OpenAI) writes the first email and 4 follow-ups
 5. Recipients / influencers are stored as mails
@@ -25,7 +25,7 @@ Frontend (signup, Google login, dashboard)
 Express API (this repo)
     ↓
 ┌───────────┬──────────┬──────────────┬─────────┐
-│ MongoDB   │ OpenAI   │ Google Sheets│  n8n    │
+│ MySQL     │ OpenAI   │ Google Sheets│  n8n    │
 │ users +   │ NOVA copy│ subject/body │  Gmail  │
 │ campaigns │          │              │         │
 └───────────┴──────────┴──────────────┴─────────┘
@@ -44,7 +44,7 @@ The signup screen collects:
 | Full name | Yes | Stored on the user |
 | Organization | Yes | Used in email signature |
 | Email address | Yes | Unique login |
-| Password | Yes | Hashed in MongoDB |
+| Password | Yes | Hashed in MySQL |
 | Confirm password | Yes | Must match password |
 | reCAPTCHA | Yes | “I’m not a robot” |
 | **Sign in with Google** | Optional | Same user collection, `googleId` |
@@ -60,12 +60,12 @@ Google Auth flow:
 1. Frontend Google button returns an ID token
 2. `POST /api/auth/google` with `{ "idToken": "..." }`
 3. Backend verifies the token with `GOOGLE_CLIENT_ID`
-4. User is created or linked in MongoDB
+4. User is created or linked in MySQL
 5. API returns the same JWT shape as email login
 
-## MongoDB collections
+## MySQL tables
 
-| Collection | Purpose |
+| Table | Purpose |
 |---|---|
 | `users` | `fullName`, `organization`, `email`, `passwordHash`, `googleId`, `authProvider` |
 | `campaigns` | `id`, `title`, `workMail`, `followups`, `camp_status`, `scheduledDate`, `status`, `user_id` |
@@ -77,8 +77,8 @@ Google Auth flow:
 
 | Layer | Tool |
 |---|---|
-| API | Node.js, Express, TypeScript |
-| Database | MongoDB |
+| API | Node.js, Express |
+| Database | MySQL |
 | Auth | Email/password + Google OAuth + JWT + reCAPTCHA |
 | Email copy | OpenAI Assistants (NOVA) |
 | Content sheet | Google Sheets API |
@@ -116,8 +116,12 @@ PORT=3001
 NODE_ENV=development
 ALLOWED_ORIGINS=http://localhost:5173
 
-# MongoDB
-MONGODB_URI=mongodb://127.0.0.1:27017/nova
+# MySQL
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=nova_ai
 
 # JWT (email/password + Google sessions)
 JWT_SECRET=
@@ -148,15 +152,15 @@ GCP_CLIENT_EMAIL=
 GCP_CLIENT_ID=
 ```
 
-### 3. Run MongoDB
+### 3. Run MySQL
 
-Local example:
+Make sure MySQL Server is running locally, then create the database:
 
 ```bash
-mongod
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS nova_ai;"
 ```
 
-Or use MongoDB Atlas and put the connection string in `MONGODB_URI`.
+Or connect to a remote MySQL host and set the credentials in your `.env`.
 
 ### 4. Google Auth (Google Cloud Console)
 
@@ -289,7 +293,7 @@ Do not start with Gmail sending.
 | Phase | Build |
 |---|---|
 | 0 | Express + `/health` |
-| 1 | MongoDB connection + `users` |
+| 1 | MySQL connection + `users` table |
 | 2 | Email/password signup (form fields + CAPTCHA) + JWT |
 | 3 | Google Auth |
 | 4 | Campaigns + mails + audit |
