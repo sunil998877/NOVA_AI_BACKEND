@@ -66,6 +66,14 @@ export const env = {
         send_followup_3: process.env.N8N_FOLLOWUP_3_WEBHOOK || "",
         send_followup_4: process.env.N8N_FOLLOWUP_4_WEBHOOK || "",
     },
+    smtp: {
+        host: process.env.SMTP_HOST || "smtp.hostinger.com",
+        port: Number(process.env.SMTP_PORT || 587),
+        user: process.env.SMTP_USER || "",
+        pass: process.env.SMTP_PASS || "",
+        from: (process.env.EMAIL_FROM || process.env.SMTP_USER || "").replace(/^["']|["']$/g, ""),
+    },
+    frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
 };
 
 if (env.nodeEnv === "production") {

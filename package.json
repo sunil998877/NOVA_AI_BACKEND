@@ -23,6 +23,7 @@
     "json5": "^2.2.3",
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.24.2",
+    "nodemailer": "^6.10.1",
     "openai": "^7.5.0",
     "uuid": "^14.0.2"
   },

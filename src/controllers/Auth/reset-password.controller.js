@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { User } from "../../models/user.model.js";
 import { env } from "../../config/env.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { sendPasswordResetEmail } from "../../utils/mailer.js";
 
 export const resetPassword = asyncHandler(async (req, res) => {
     const { email, redirectTo } = req.body;
@@ -12,7 +13,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
 
     const user = await User.findByEmail(email);
     const generic = {
-        message: "If that email is registered, a reset link has been prepared.",
+        message: "If that email is registered, a reset link has been sent.",
     };
 
     if (!user) {
@@ -25,11 +26,13 @@ export const resetPassword = asyncHandler(async (req, res) => {
         passwordResetExpires: new Date(Date.now() + 60 * 60 * 1000),
     });
 
-    const base = redirectTo || "https://novaaisoft.netlify.app/reset-password";
+    const base = redirectTo || `${env.frontendUrl}/update-password`;
     const resetUrl = `${base}${base.includes("?") ? "&" : "?"}token=${rawToken}&email=${encodeURIComponent(user.email)}`;
 
-    if (env.nodeEnv !== "production") {
-        return res.status(200).json({ ...generic, resetUrl });
+    try {
+        await sendPasswordResetEmail({ to: user.email, resetUrl });
+    } catch {
+        return res.status(500).json({ error: "Could not send reset email. Please try again later." });
     }
 
     return res.status(200).json(generic);
