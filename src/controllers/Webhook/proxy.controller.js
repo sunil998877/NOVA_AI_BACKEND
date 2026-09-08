@@ -1,6 +1,7 @@
 import { env } from "../../config/env.js";
 import { fetchWithTimeout } from "../../utils/fetch.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { Campaign } from "../../models/campaign.model.js";
 
 const ACTION_URLS = {
     start_campaign: () => env.n8nMainWebhook,
@@ -16,11 +17,26 @@ export const proxyWebhook = asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };
     const campaignId = params.campaignId || "";
     const action = params.action || "";
-    const workMail = params.workMail || "";
+    let workMail = params.workMail || "";
+    let subject = params.subject || "";
+    let body = params.body || "";
     const timestamp = params.timestamp || new Date().toISOString();
 
     if (!campaignId || !action) {
         return res.status(400).json({ error: "Missing required parameters" });
+    }
+
+    if (campaignId && (!subject || !body || !workMail)) {
+        try {
+            const campaign = await Campaign.findById(campaignId);
+            if (campaign) {
+                if (!subject) subject = campaign.subject || "";
+                if (!body) body = campaign.body || "";
+                if (!workMail) workMail = campaign.workMail || "";
+            }
+        } catch {
+            // continue with provided params
+        }
     }
 
     const resolveUrl = ACTION_URLS[action];
@@ -36,6 +52,8 @@ export const proxyWebhook = asyncHandler(async (req, res) => {
         action,
     });
     if (workMail) queryParams.append("workMail", workMail);
+    if (subject) queryParams.append("subject", subject);
+    if (body) queryParams.append("body", body);
 
     const auth = Buffer.from(`${env.n8nUser}:${env.n8nPassword}`).toString("base64");
     const response = await fetchWithTimeout(`${webhookUrl}?${queryParams}`, {

@@ -165,12 +165,11 @@ Map:
 | email | `{{ $json.email }}` |
 | full_name | `{{ $json.full_name }}` |
 | workMail | `{{ $('Webhook').item.json.query.workMail }}` |
-| action | `{{ $('Webhook').item.json.query.action }}` |
-| subject | campaign subject (or a test string) |
-| body | campaign body (or a test string) |
+| subject | `{{ $json.subject || $('Webhook').item.json.query.subject || $('Webhook').item.json.body.subject }}` |
+| body | `{{ $json.body || $('Webhook').item.json.query.body || $('Webhook').item.json.body.body }}` |
 | status | `queued` |
 
-Subject/body: `/api/google-sheets/*` on this backend is still **501**. Put copy in n8n Variables, another sheet tab, or `GET /api/campaigns/:id` plus your own copy store.
+> **Note:** Backend now automatically enriches all mail endpoints and webhook calls with the campaign's real `subject` and `body`.
 
 ### Node 6 — Google Sheets (save all mails)
 
@@ -195,8 +194,8 @@ For 2–3 test emails you can skip this and go straight to Gmail.
 - Credential: Gmail OAuth2 for the campaign **workMail** account  
 - Operation: **Send**  
 - **To:** `{{ $json.email }}`  
-- **Subject:** `{{ $json.subject }}`  
-- **Message:** `{{ $json.body }}`  
+- **Subject:** `{{ $json.subject || $('Webhook').item.json.query.subject || $('Webhook').item.json.body.subject }}` (Set to **Expression**, not Fixed!)  
+- **Message:** `{{ $json.body || $('Webhook').item.json.query.body || $('Webhook').item.json.body.body }}` (Set to **Expression**, not Fixed!)  
 
 n8n runs this once per item = all users, one workflow.
 

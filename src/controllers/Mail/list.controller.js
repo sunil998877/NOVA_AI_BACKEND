@@ -17,5 +17,36 @@ export const listMails = asyncHandler(async (req, res) => {
         Mail.findForUserCampaigns(ids, campaignId, { skip, limit }),
         Mail.countForUserCampaigns(ids, campaignId),
     ]);
-    return res.status(200).json({ data, total, page, limit });
+
+    let campaign = null;
+    if (campaignId) {
+        campaign = await Campaign.findById(campaignId);
+    }
+
+    const enrichedData = data.map((item) => {
+        if (campaign && String(item.campaign_id) === String(campaign.id)) {
+            return {
+                ...item,
+                subject: campaign.subject || "",
+                body: campaign.body || "",
+                workMail: campaign.workMail || "",
+            };
+        }
+        return item;
+    });
+
+    return res.status(200).json({
+        data: enrichedData,
+        total,
+        page,
+        limit,
+        ...(campaign
+            ? {
+                  subject: campaign.subject || "",
+                  body: campaign.body || "",
+                  workMail: campaign.workMail || "",
+                  campaignTitle: campaign.title || "",
+              }
+            : {}),
+    });
 });

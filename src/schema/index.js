@@ -5,6 +5,8 @@ import { conversationSchema } from "./conversation.schema.js";
 import { messageSchema } from "./message.schema.js";
 import { auditSchema } from "./audit.schema.js";
 import { influencerSchema } from "./influencer.schema.js";
+import { contactSchema } from "./contact.schema.js";
+import { campaignRecipientSchema } from "./campaign-recipient.schema.js";
 
 export const schemas = [
     userSchema,
@@ -14,6 +16,8 @@ export const schemas = [
     messageSchema,
     auditSchema,
     influencerSchema,
+    contactSchema,
+    campaignRecipientSchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);

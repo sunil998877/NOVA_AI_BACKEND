@@ -78,10 +78,10 @@ Only needed if you keep a GET webhook (not recommended):
 | Field | Value |
 |---|---|
 | To | `{{ $json.email }}` |
-| Subject | `{{ $('Webhook').item.json.body.subject }}` or `{{ $json.subject }}` |
-| Message | `{{ $('Webhook').item.json.body.body }}` or `{{ $json.body }}` |
+| Subject | `{{ $json.subject || $('Webhook').item.json.query.subject || $('Webhook').item.json.body.subject }}` |
+| Message | `{{ $json.body || $('Webhook').item.json.query.body || $('Webhook').item.json.body.body }}` |
 
-One recipient per iteration — never put all emails in To.
+> **Crucial:** Make sure the **Subject** and **Message** fields in your Gmail node are set to **Expression** (click the `fx` or Expression tab) and not **Fixed**. If they are set to Fixed text, n8n will send the same static text for every campaign!
 
 ## Per-recipient tracking
 

@@ -4,8 +4,22 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { forceCompleteCampaign } from "../../services/campaign-reconcile.service.js";
 
 export const completeCampaign = asyncHandler(async (req, res) => {
-    const campaignId = req.params.campaignId || req.params.id;
-    const campaign = await Campaign.findOwned(campaignId, req.user.id);
+    const campaignId = req.params.campaignId || req.params.id || req.body?.campaignId;
+    if (!campaignId || campaignId === "undefined" || campaignId === "null") {
+        return res.status(400).json({ error: "Missing or invalid campaignId in request URL" });
+    }
+
+    let campaign;
+    if (req.authVia === "n8n_basic") {
+        campaign = await Campaign.findById(campaignId);
+    } else if (req.authVia === "n8n_campaign_token") {
+        if (String(req.n8nCampaignId) !== String(campaignId)) {
+            return res.status(403).json({ error: "Token is not valid for this campaign" });
+        }
+        campaign = await Campaign.findById(campaignId);
+    } else {
+        campaign = await Campaign.findOwned(campaignId, req.user.id);
+    }
 
     if (!campaign) {
         return res.status(403).json({ error: "Access denied: You do not own this campaign" });

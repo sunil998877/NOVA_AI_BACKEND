@@ -4,7 +4,13 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { toMysqlDateTime } from "../../utils/datetime.js";
 
 export const updateCampaign = asyncHandler(async (req, res) => {
-    const existing = await Campaign.findOwned(req.params.id, req.user.id);
+    const campaignId = req.params.id || req.params.campaignId || req.body?.campaignId;
+    let existing;
+    if (req.authVia === "n8n_basic" || req.authVia === "n8n_campaign_token") {
+        existing = await Campaign.findById(campaignId);
+    } else {
+        existing = await Campaign.findOwned(campaignId, req.user.id);
+    }
     if (!existing) {
         return res.status(403).json({ error: "Access denied: You do not own this campaign" });
     }

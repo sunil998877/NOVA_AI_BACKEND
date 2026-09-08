@@ -11,6 +11,8 @@ import openaiRoutes from "./routes/openai.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
 import sheetsRoutes from "./routes/sheets.routes.js";
 import influencerRoutes from "./routes/influencer.routes.js";
+import contactRoutes from "./routes/contact.routes.js";
+import trackRoutes from "./routes/track.routes.js";
 
 export const app = express();
 
@@ -82,7 +84,7 @@ app.use((req, _res, next) => {
     next();
 });
 
-app.get("/health", (_req, res) => {
+app.get("/", (_req, res) => {
     res.status(200).send("Backend is running");
 });
 
@@ -99,6 +101,9 @@ app.use("/api/openai", openaiRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/google-sheets", sheetsRoutes);
 app.use("/api/influencers", influencerRoutes);
+app.use("/api/contacts", contactRoutes);
+app.use("/api/track", trackRoutes);
+
 
 app.use((err, _req, res, _next) => {
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) {

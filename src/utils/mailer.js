@@ -2,34 +2,37 @@ import nodemailer from "nodemailer";
 import { env } from "../config/env.js";
 
 function getTransporter() {
-    return nodemailer.createTransport({
-        host: env.smtp.host,
-        port: env.smtp.port,
-        secure: env.smtp.port === 465,
-        auth: {
-            user: env.smtp.user,
-            pass: env.smtp.pass,
-        },
-        tls: {
-            rejectUnauthorized: false,
-        },
-    });
+  return nodemailer.createTransport({
+    host: env.smtp.host,
+    port: env.smtp.port,
+    secure: env.smtp.port === 465,
+    auth: {
+      user: env.smtp.user,
+      pass: env.smtp.pass,
+    },
+    tls: {
+      rejectUnauthorized: false,
+    },
+  });
 }
 
-export async function sendMail({ to, subject, html, text }) {
-    const transporter = getTransporter();
-    return transporter.sendMail({
-        from: env.smtp.from,
-        to,
-        subject,
-        html,
-        text: text || html.replace(/<[^>]+>/g, ""),
-    });
+export async function sendMail({ to, subject, html, text, from, replyTo, headers }) {
+  const transporter = getTransporter();
+  return transporter.sendMail({
+    from: from || env.smtp.from || env.smtp.user,
+    to,
+    subject,
+    html,
+    text: text || (html ? html.replace(/<[^>]+>/g, "") : ""),
+    replyTo: replyTo || undefined,
+    headers: headers || undefined,
+  });
 }
+
 
 export async function sendPasswordResetEmail({ to, resetUrl }) {
-    const subject = "Reset your NOVA password";
-    const html = `
+  const subject = "Reset your NOVA password";
+  const html = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -87,5 +90,5 @@ export async function sendPasswordResetEmail({ to, resetUrl }) {
 </body>
 </html>`;
 
-    return sendMail({ to, subject, html });
+  return sendMail({ to, subject, html });
 }

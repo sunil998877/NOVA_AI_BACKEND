@@ -8,17 +8,26 @@ import { updateCampaignStatus } from "../controllers/Campaign/update-status.cont
 import { sendCampaign } from "../controllers/Campaign/send.controller.js";
 import { completeCampaign } from "../controllers/Campaign/complete.controller.js";
 import { deleteCampaign } from "../controllers/Campaign/delete.controller.js";
+import { listCampaignRecipients } from "../controllers/CampaignRecipient/list.controller.js";
+import { addCampaignRecipients } from "../controllers/CampaignRecipient/add.controller.js";
+import { removeCampaignRecipient } from "../controllers/CampaignRecipient/remove.controller.js";
+import { previewCampaign } from "../controllers/Campaign/preview.controller.js";
 
 const router = Router();
 
 router.get("/list", authenticate, listCampaigns);
 router.post("/create", authenticate, createCampaign);
+router.get("/:campaignId/recipients", authenticate, listCampaignRecipients);
+router.post("/:campaignId/recipients", authenticate, addCampaignRecipients);
+router.delete("/:campaignId/recipients/:contactId", authenticate, removeCampaignRecipient);
 router.post("/:campaignId/send", authenticate, sendCampaign);
-router.post("/:campaignId/complete", authenticate, completeCampaign);
+router.post("/:campaignId/complete", authenticateUserOrN8n, completeCampaign);
 router.patch("/:campaignId/status", authenticateUserOrN8n, updateCampaignStatus);
+router.get("/:id/preview", authenticate, previewCampaign);
 router.get("/:id", authenticate, getCampaign);
 router.put("/:id", authenticate, updateCampaign);
-router.patch("/:id", authenticate, updateCampaign);
+router.patch("/:id", authenticateUserOrN8n, updateCampaign);
 router.delete("/:id", authenticate, deleteCampaign);
 
 export default router;
+
