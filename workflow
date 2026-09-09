@@ -11,11 +11,11 @@
 └────────────┬───────────────────────────┬────────────────┘
              │                           │
              ▼                           ▼
-      ┌─────────────┐            ┌──────────────┐
-      │ OpenAI      │            │ n8n (WebSpaceKit)
-      │ draft copy  │            │ Sheets + Gmail send
-      └─────────────┘            └──────────────┘
-                                        │
-                                        ▼
-                                   Recipients’ inbox
-                                   From: campaign workMail
+       ┌─────────────┐            ┌──────────────┐
+       │ OpenAI      │            │ n8n
+       │ draft copy  │            │ Loop + SMTP Send Email
+       └─────────────┘            └──────────────┘
+                                         │
+                                         ▼
+                                    Recipients’ inbox
+                                    From: NOVA AI <nova@yourdomain.com>

@@ -17,7 +17,8 @@ export const proxyWebhook = asyncHandler(async (req, res) => {
     const params = { ...req.query, ...req.body };
     const campaignId = params.campaignId || "";
     const action = params.action || "";
-    let workMail = params.workMail || "";
+    const senderEmail = env.novaSenderEmail || "nova@yourdomain.com";
+    const senderName = env.novaSenderName || "NOVA AI";
     let subject = params.subject || "";
     let body = params.body || "";
     const timestamp = params.timestamp || new Date().toISOString();
@@ -26,16 +27,15 @@ export const proxyWebhook = asyncHandler(async (req, res) => {
         return res.status(400).json({ error: "Missing required parameters" });
     }
 
-    if (campaignId && (!subject || !body || !workMail)) {
+    if (campaignId && (!subject || !body)) {
         try {
             const campaign = await Campaign.findById(campaignId);
             if (campaign) {
                 if (!subject) subject = campaign.subject || "";
                 if (!body) body = campaign.body || "";
-                if (!workMail) workMail = campaign.workMail || "";
             }
         } catch {
-            // continue with provided params
+
         }
     }
 
@@ -50,8 +50,10 @@ export const proxyWebhook = asyncHandler(async (req, res) => {
         campaignId,
         timestamp,
         action,
+        senderEmail,
+        senderName,
+        from: `"${senderName}" <${senderEmail}>`,
     });
-    if (workMail) queryParams.append("workMail", workMail);
     if (subject) queryParams.append("subject", subject);
     if (body) queryParams.append("body", body);
 

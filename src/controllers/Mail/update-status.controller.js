@@ -14,7 +14,7 @@ export const updateMailStatus = asyncHandler(async (req, res) => {
             return res.status(403).json({ error: "Token is not valid for this mail" });
         }
     } else if (req.authVia === "n8n_basic") {
-        // Workflow service account may update any mail it was given.
+
     } else {
         const campaign = await Campaign.findOwned(mail.campaign_id, req.user.id);
         if (!campaign) {

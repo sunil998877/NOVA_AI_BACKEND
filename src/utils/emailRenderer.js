@@ -1,16 +1,12 @@
 import { marked } from "marked";
 
-/**
- * Configure marked for email generation
- */
+
 marked.setOptions({
   gfm: true,
   breaks: true,
 });
 
-/**
- * Sanitizes HTML to prevent XSS in email clients
- */
+
 export function sanitizeHtml(html) {
   if (!html || typeof html !== "string") return "";
   return html
@@ -23,9 +19,7 @@ export function sanitizeHtml(html) {
     .replace(/javascript:[^"']*/gi, "#");
 }
 
-/**
- * Resolves template placeholders such as {{recipient_name}}, [Recipient's Name], etc.
- */
+
 export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
   if (!text || typeof text !== "string") return "";
 

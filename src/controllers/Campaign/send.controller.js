@@ -5,9 +5,7 @@ import { Mail } from "../../models/mail.model.js";
 import { audit } from "../../utils/audit.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { signCampaignSendToken } from "../../utils/campaign-send-token.js";
-import { sendMail } from "../../utils/mailer.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
-import { toMysqlDateTime } from "../../utils/datetime.js";
 
 async function callN8nWebhook(payload) {
     const webhookUrl = env.n8nWebhookUrl;
@@ -24,11 +22,26 @@ async function callN8nWebhook(payload) {
 
     if (method !== "GET") {
         headers["Content-Type"] = "application/json";
+
+        if (webhookUrl.includes("/webhook/")) {
+            const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
+            fetchWithTimeout(testUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify(payload),
+            }, 2000)
+                .then((r) => {
+                    if (r.ok) console.log("[n8n] Test webhook canvas triggered (POST):", r.status);
+                })
+                .catch(() => { });
+        }
+
         const res = await fetchWithTimeout(webhookUrl, {
             method: "POST",
             headers,
             body: JSON.stringify(payload),
         });
+        console.log("[n8n] POST response:", res.status);
         return res;
     }
 
@@ -38,15 +51,16 @@ async function callN8nWebhook(payload) {
         action: payload.action || "start_campaign",
         timestamp: payload.timestamp || new Date().toISOString(),
         totalRecipients: String(payload.totalRecipients ?? 0),
+        senderEmail: payload.senderEmail || env.novaSenderEmail,
+        senderName: payload.senderName || env.novaSenderName,
+        from: payload.from || `"${env.novaSenderName}" <${env.novaSenderEmail}>`,
     });
-    if (payload.workMail) query.set("workMail", payload.workMail);
     if (payload.subject) query.set("subject", payload.subject);
     if (payload.body) query.set("body", payload.body);
     if (payload.html) query.set("html", payload.html);
     if (payload.accessToken) query.set("accessToken", payload.accessToken);
     if (payload.apiBaseUrl) query.set("apiBaseUrl", payload.apiBaseUrl);
 
-    // Provide flat recipient fields directly for n8n Gmail node (To: {{ $json.query.to }})
     if (firstRecipient.email) {
         query.set("to", firstRecipient.email);
         query.set("email", firstRecipient.email);
@@ -66,12 +80,11 @@ async function callN8nWebhook(payload) {
     const fullUrl = `${webhookUrl}?${query}`;
     console.log("[n8n] GET →", webhookUrl, "| campaignId:", payload.campaignId, "| recipients:", payload.totalRecipients);
 
-    // If n8n workflow editor has a test listener open (/webhook-test/), also notify test URL
     if (webhookUrl.includes("/webhook/")) {
         const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
         fetchWithTimeout(`${testUrl}?${query}`, { method: "GET", headers }, 2000)
             .then((r) => {
-                if (r.ok) console.log("[n8n] Test webhook canvas triggered:", r.status);
+                if (r.ok) console.log("[n8n] Test webhook canvas triggered (GET):", r.status);
             })
             .catch(() => { });
     }
@@ -93,7 +106,7 @@ export const sendCampaign = asyncHandler(async (req, res) => {
     }
 
     if (String(campaign.status || "").toLowerCase() === "processing") {
-        // Recover from previous crashes if stuck in processing for over 60 seconds
+
         const updatedAt = campaign.updatedAt ? new Date(campaign.updatedAt).getTime() : 0;
         const isStale = (Date.now() - updatedAt) > 60_000;
         if (!isStale && !req.body?.force) {
@@ -107,7 +120,12 @@ export const sendCampaign = asyncHandler(async (req, res) => {
     }
 
     const recipients = await Mail.findByCampaignId(campaign.id);
+
+
     const totalRecipients = recipients.length;
+
+    console.log("receipt name : ", recipients[0].full_name);
+
 
     if (totalRecipients === 0) {
         return res.status(400).json({
@@ -139,7 +157,10 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         `${req.protocol}://${req.get("host")}`
     ).replace(/\/$/, "");
 
-    // 1. Render personalized email for each recipient
+    const senderEmail = env.novaSenderEmail || "nova@yourdomain.com";
+    const senderName = env.novaSenderName || "NOVA AI";
+    const fromAddress = `"${senderName}" <${senderEmail}>`;
+
     const renderedRecipients = recipients.map((mail) => {
         const rendered = renderCampaignEmail({
             subject: rawSubject,
@@ -148,16 +169,25 @@ export const sendCampaign = asyncHandler(async (req, res) => {
                 id: mail.id,
                 email: mail.email,
                 full_name: mail.full_name,
+
+
+
             },
+
+
+
             campaign: {
                 id: campaign.id,
                 title: campaign.title,
-                workMail: campaign.workMail,
+                sender_name: senderName,
+                sender_email: senderEmail,
             },
             mailId: mail.id,
             apiBaseUrl,
             enableTracking: true,
         });
+
+
 
         return {
             id: mail.id,
@@ -167,7 +197,9 @@ export const sendCampaign = asyncHandler(async (req, res) => {
             subject: rendered.subject,
             body: rendered.text,
             html: rendered.html,
-            workMail: campaign.workMail || "",
+            senderEmail,
+            senderName,
+            from: fromAddress,
         };
     });
 
@@ -176,10 +208,12 @@ export const sendCampaign = asyncHandler(async (req, res) => {
     const primaryBody = firstItem.body || rawBody;
     const primaryHtml = firstItem.html || "";
 
-    // 2. Prepare payload for n8n
     const payload = {
         campaignId: campaign.id,
-        workMail: campaign.workMail || "",
+        senderEmail,
+        senderName,
+        from: fromAddress,
+        fromEmail: senderEmail,
         subject: primarySubject,
         body: primaryBody,
         html: primaryHtml,
@@ -192,69 +226,42 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         data: renderedRecipients,
     };
 
-    // 3. Trigger n8n Webhook
+    for (const mail of recipients) {
+        await Mail.updateById(mail.id, {
+            status: 0,
+            delivery_status: "pending",
+        });
+    }
+
     let n8nSuccess = false;
     let n8nError = null;
     if (env.n8nWebhookUrl) {
         try {
             const n8nRes = await callN8nWebhook(payload);
             n8nSuccess = n8nRes && n8nRes.ok;
+            if (!n8nSuccess && n8nRes) {
+                n8nError = `n8n responded with status ${n8nRes.status}`;
+            }
         } catch (err) {
             console.error("[sendCampaign] n8n webhook error:", err.message);
             n8nError = err.message;
         }
+    } else {
+        n8nError = "N8N_WEBHOOK_URL is not configured in backend environment";
     }
 
-    // 4. Send directly via Nodemailer as well with cleanly formatted From header
-    let sentCount = 0;
-    let failedCount = 0;
-    const sendErrors = [];
+    if (!n8nSuccess) {
+        await Campaign.updateById(campaign.id, {
+            status: "failed",
+            camp_status: "Failed",
+        });
 
-    const cleanDisplayName = (campaign.title || "NOVA").replace(/["\r\n<>]/g, "").trim();
-    const rawSmtpEmail = (env.smtp.user || env.smtp.from || "").replace(/.*<([^>]+)>.*/, "$1").trim();
-    const fromHeader = `"${cleanDisplayName}" <${rawSmtpEmail}>`;
-
-    for (const item of renderedRecipients) {
-        try {
-            await sendMail({
-                to: item.email,
-                subject: item.subject,
-                html: item.html,
-                text: item.body,
-                from: fromHeader,
-                replyTo: campaign.workMail || undefined,
-            });
-
-            await Mail.updateById(item.id, {
-                status: 1,
-                delivery_status: "sent",
-                sent_at: toMysqlDateTime(new Date()),
-            });
-
-            sentCount++;
-        } catch (mailError) {
-            console.error(`[Campaign Send] Nodemailer error for ${item.email}:`, mailError.message);
-            failedCount++;
-            sendErrors.push({ email: item.email, error: mailError.message });
-
-            if (!n8nSuccess) {
-                await Mail.updateById(item.id, {
-                    status: 0,
-                    delivery_status: "failed",
-                });
-            }
-        }
+        return res.status(502).json({
+            error: "Failed to dispatch campaign to n8n webhook",
+            details: n8nError,
+            campaignId: campaign.id,
+        });
     }
-
-    const finalStatus = (sentCount > 0 || n8nSuccess) ? "completed" : "failed";
-    const finalCampStatus = (sentCount > 0 || n8nSuccess) ? "Completed" : "Failed";
-
-    await Campaign.updateById(campaign.id, {
-        status: finalStatus,
-        camp_status: finalCampStatus,
-        sent_count: Math.max(sentCount, n8nSuccess ? totalRecipients : 0),
-        failed_count: n8nSuccess ? 0 : failedCount,
-    });
 
     await audit(req.user.id, "CAMPAIGN_SEND", campaign.id, req.ip);
 
@@ -262,12 +269,13 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         success: true,
         campaignId: campaign.id,
         totalRecipients,
-        sentCount: Math.max(sentCount, n8nSuccess ? totalRecipients : 0),
-        failedCount: n8nSuccess ? 0 : failedCount,
-        status: finalStatus,
-        n8nTriggered: n8nSuccess,
-        n8nError: n8nError || undefined,
-        errors: sendErrors.length > 0 ? sendErrors : undefined,
-        message: `Campaign processed: ${totalRecipients} recipient(s) queued`,
+        sentCount: 0,
+        failedCount: 0,
+        status: "processing",
+        n8nTriggered: true,
+        sender: fromAddress,
+        message: `Campaign queued: ${totalRecipients} recipient(s) dispatched to n8n SMTP worker`,
     });
+
+
 });

@@ -7,8 +7,6 @@ export const createCampaign = asyncHandler(async (req, res) => {
     const {
         title,
         campaign_name,
-        workMail,
-        work_mail,
         followups,
         camp_status,
         scheduledDate,
@@ -25,7 +23,7 @@ export const createCampaign = asyncHandler(async (req, res) => {
 
     const campaign = await Campaign.create({
         title: resolvedTitle,
-        workMail: workMail ?? work_mail ?? null,
+        workMail: null,
         followups: followups ?? "0",
         camp_status: camp_status ?? "Pending",
         scheduledDate: toMysqlDateTime(scheduledDate ?? scheduled_date),

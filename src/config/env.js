@@ -73,6 +73,8 @@ export const env = {
         pass: process.env.SMTP_PASS || "",
         from: (process.env.EMAIL_FROM || process.env.SMTP_USER || "").replace(/^["']|["']$/g, ""),
     },
+    novaSenderEmail: (process.env.NOVA_SENDER_EMAIL || "nova@yourdomain.com").replace(/^["']|["']$/g, "").trim(),
+    novaSenderName: (process.env.NOVA_SENDER_NAME || "NOVA AI").replace(/^["']|["']$/g, "").trim(),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
 };
 

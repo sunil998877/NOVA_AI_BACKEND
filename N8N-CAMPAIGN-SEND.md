@@ -1,4 +1,4 @@
-# Campaign send → n8n (POST)
+# Campaign send → n8n SMTP (POST)
 
 ## App flow
 
@@ -7,16 +7,19 @@ Frontend Send
   → POST /api/campaigns/:campaignId/send   (JWT)
   → Backend loads mails, sets status=processing
   → POST N8N_WEBHOOK_URL  JSON {
-        campaignId, subject, body, workMail,
-        recipients: [{ id, email, full_name }],
+        campaignId, subject, body, html,
+        senderEmail: "nova@yourdomain.com",
+        senderName: "NOVA AI",
+        from: "\"NOVA AI\" <nova@yourdomain.com>",
+        recipients: [{ id, email, full_name, subject, body, html }],
         data: [...], accessToken, apiBaseUrl
       }
-  → n8n Split Out on `data` or `recipients` → Loop → Gmail
-  → PATCH /api/mails/:id  (Bearer accessToken or n8n Basic Auth)
-  → PATCH /api/campaigns/:id/status  (when done)
+  → n8n Split Out on `recipients` → Loop Over Items → Send Email (SMTP)
+  → PATCH /api/mails/:id  (Bearer accessToken: delivery_status="sent" or "failed")
+  → PATCH /api/campaigns/:id/status  (when Loop done: status="completed")
 ```
 
-**Important:** Use a **POST** Webhook in n8n. GET cannot carry recipients or email body, so Gmail never gets anyone to send to.
+**Important:** Use a **POST** Webhook in n8n. The single fixed sender is always `NOVA AI <nova@yourdomain.com>`. All SMTP credentials (Host, Port, User, Pass, SSL/TLS) are configured securely inside n8n credentials and are **never** stored in campaigns or exposed to the frontend.
 
 ## Env
 
@@ -26,17 +29,20 @@ N8N_WEBHOOK_METHOD=POST
 N8N_USER=Nova
 N8N_PASSWORD=your_password
 PUBLIC_API_URL=https://your-public-api-or-ngrok
+NOVA_SENDER_EMAIL=nova@yourdomain.com
+NOVA_SENDER_NAME=NOVA AI
 ```
 
-`N8N_MAIN_WEBHOOK` still works as a fallback.
+## Ready Workflow File
+You can directly import `Backend/n8n-smtp-workflow.json` into your n8n workspace.
 
 ## n8n Webhook node
 
 | Setting | Value |
 |---|---|
-| HTTP Method | **POST** (required for recipients + body) |
+| HTTP Method | **POST** |
 | Authentication | Basic Auth (`N8N_USER` / `N8N_PASSWORD`) |
-| Path | your production path |
+| Path | `nova-campaign-send` (or your chosen path) |
 | Respond | Immediately or When Last Node Finishes |
 
 ### POST body (from Nova)
@@ -44,44 +50,38 @@ PUBLIC_API_URL=https://your-public-api-or-ngrok
 ```json
 {
   "campaignId": 6,
-  "workMail": "you@gmail.com",
+  "senderEmail": "nova@yourdomain.com",
+  "senderName": "NOVA AI",
+  "from": "\"NOVA AI\" <nova@yourdomain.com>",
   "subject": "...",
   "body": "...",
+  "html": "<html>...</html>",
   "action": "start_campaign",
   "totalRecipients": 2,
   "accessToken": "<short-lived JWT for callbacks>",
   "apiBaseUrl": "https://your-api",
-  "recipients": [{ "id": 1, "email": "a@x.com", "full_name": "" }],
-  "data": [{ "id": 1, "email": "a@x.com", "full_name": "", "campaign_id": 6, "subject": "...", "body": "..." }]
+  "recipients": [{ "id": 1, "email": "user1@example.com", "full_name": "User", "subject": "...", "body": "...", "html": "..." }],
+  "data": [...]
 }
 ```
 
-Read fields as `{{ $json.body.subject }}` / `{{ $json.subject }}` depending on n8n version.
+## Split Out & Loop Over Items
 
-## Split Out (preferred — no HTTP back to API)
+- **Split Out Node:** Field to Split Out: `recipients` (or `body.recipients`)
+- **Loop Over Items (Split In Batches):** Batch size: `1`
 
-**Field to Split Out:** `data` (or `recipients`)  
-→ one item per recipient. Gmail To = `{{ $json.email }}`.
-
-## Optional HTTP Request — fetch recipients
-
-Only needed if you keep a GET webhook (not recommended):
+## Send Email Node (SMTP)
 
 | Field | Value |
 |---|---|
-| Method | GET |
-| URL | `{{ $json.apiBaseUrl }}/api/mails/campaign/{{ $json.campaignId }}` |
-| Header | `Authorization: Bearer {{ $json.accessToken }}` |
-
-## Gmail (loop branch)
-
-| Field | Value |
-|---|---|
-| To | `{{ $json.email }}` |
-| Subject | `{{ $json.subject || $('Webhook').item.json.query.subject || $('Webhook').item.json.body.subject }}` |
-| Message | `{{ $json.body || $('Webhook').item.json.query.body || $('Webhook').item.json.body.body }}` |
-
-> **Crucial:** Make sure the **Subject** and **Message** fields in your Gmail node are set to **Expression** (click the `fx` or Expression tab) and not **Fixed**. If they are set to Fixed text, n8n will send the same static text for every campaign!
+| Credential | **SMTP account** (securely created in n8n credentials) |
+| From Email | `NOVA AI <{{ $('Webhook').item.json.body.senderEmail || 'nova@yourdomain.com' }}>` |
+| To Email | `{{ $json.email }}` |
+| Subject | `{{ $json.subject }}` |
+| HTML | `{{ $json.html || $json.body }}` |
+| Text | `{{ $json.body }}` |
+| Ignore SSL Issues | As appropriate for your SMTP host |
+| Continue on Fail | **true** (prevents one bad email from halting entire campaign) |
 
 ## Per-recipient tracking
 

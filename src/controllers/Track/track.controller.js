@@ -69,7 +69,7 @@ export const trackClick = asyncHandler(async (req, res) => {
       return res.redirect(302, targetUrl);
     }
   } catch {
-    // fallback
+
   }
 
   return res.redirect(302, "/");

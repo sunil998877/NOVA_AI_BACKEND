@@ -15,6 +15,9 @@ const mapMail = (row) => {
 export const Mail = {
     async findById(id) {
         const rows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [id]);
+
+
+
         return mapMail(rows[0]);
     },
 
