@@ -1,8 +1,18 @@
 export const mailSchema = {
     table: "mails",
     columns:
-        "id, campaign_id, user_id, email, full_name, status, delivery_status, open_count, sent_at, createdAt, updatedAt",
-    updatable: ["status", "delivery_status", "open_count", "sent_at", "full_name", "email"],
+        "id, campaign_id, user_id, email, full_name, status, delivery_status, open_count, click_count, first_opened_at, last_opened_at, sent_at, createdAt, updatedAt",
+    updatable: [
+        "status",
+        "delivery_status",
+        "open_count",
+        "click_count",
+        "first_opened_at",
+        "last_opened_at",
+        "sent_at",
+        "full_name",
+        "email",
+    ],
     createTable: `CREATE TABLE IF NOT EXISTS mails (
         id INT AUTO_INCREMENT PRIMARY KEY,
         campaign_id INT NOT NULL,
@@ -12,6 +22,9 @@ export const mailSchema = {
         status TINYINT(1) NOT NULL DEFAULT 0,
         delivery_status VARCHAR(32) NOT NULL DEFAULT 'pending',
         open_count INT NOT NULL DEFAULT 0,
+        click_count INT NOT NULL DEFAULT 0,
+        first_opened_at DATETIME NULL,
+        last_opened_at DATETIME NULL,
         sent_at DATETIME NULL,
         createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

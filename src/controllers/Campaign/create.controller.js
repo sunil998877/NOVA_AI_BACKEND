@@ -7,6 +7,10 @@ export const createCampaign = asyncHandler(async (req, res) => {
     const {
         title,
         campaign_name,
+        sender_name,
+        senderName,
+        sender_email,
+        senderEmail,
         followups,
         camp_status,
         scheduledDate,
@@ -23,6 +27,8 @@ export const createCampaign = asyncHandler(async (req, res) => {
 
     const campaign = await Campaign.create({
         title: resolvedTitle,
+        sender_name: sender_name || senderName || null,
+        sender_email: sender_email || senderEmail || null,
         workMail: null,
         followups: followups ?? "0",
         camp_status: camp_status ?? "Pending",

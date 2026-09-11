@@ -18,6 +18,10 @@ export const updateCampaign = asyncHandler(async (req, res) => {
     const {
         title,
         campaign_name,
+        sender_name,
+        senderName,
+        sender_email,
+        senderEmail,
         followups,
         camp_status,
         scheduledDate,
@@ -30,6 +34,8 @@ export const updateCampaign = asyncHandler(async (req, res) => {
     const rawScheduledDate = scheduledDate ?? scheduled_date;
     const updated = await Campaign.updateById(existing.id, {
         title: title || campaign_name,
+        sender_name: sender_name || senderName,
+        sender_email: sender_email || senderEmail,
         followups,
         camp_status,
         scheduledDate:

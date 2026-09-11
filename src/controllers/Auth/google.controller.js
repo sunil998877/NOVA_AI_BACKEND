@@ -36,7 +36,7 @@ export const googleAuth = asyncHandler(async (req, res) => {
     const email = payload.email.toLowerCase();
     const googleId = payload.sub;
     const fullName = payload.name || payload.given_name || email.split("@")[0];
-    const organization = payload.hd || "Independent";
+    const organization = payload.hd || "";
 
     let user = await User.findByGoogleIdOrEmail(googleId, email);
 
@@ -48,8 +48,17 @@ export const googleAuth = asyncHandler(async (req, res) => {
             googleId,
             authProvider: "google",
         });
-    } else if (!user.googleId) {
-        user = await User.updateById(user.id, { googleId });
+    } else {
+        const updates = {};
+        if (!user.googleId) {
+            updates.googleId = googleId;
+        }
+        if (String(user.organization || "").trim().toLowerCase() === "independent") {
+            updates.organization = organization;
+        }
+        if (Object.keys(updates).length > 0) {
+            user = await User.updateById(user.id, updates);
+        }
     }
 
     const token = signAuthToken(user);

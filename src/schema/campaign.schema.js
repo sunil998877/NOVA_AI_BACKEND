@@ -1,9 +1,11 @@
 export const campaignSchema = {
     table: "campaigns",
     columns:
-        "id, title, workMail, followups, camp_status, scheduledDate, status, subject, body, total_recipients, sent_count, failed_count, user_id, createdAt, updatedAt",
+        "id, title, sender_name, sender_email, workMail, followups, camp_status, scheduledDate, status, subject, body, total_recipients, sent_count, failed_count, user_id, createdAt, updatedAt",
     updatable: [
         "title",
+        "sender_name",
+        "sender_email",
         "workMail",
         "followups",
         "camp_status",

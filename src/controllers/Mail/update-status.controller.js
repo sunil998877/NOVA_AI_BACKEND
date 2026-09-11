@@ -29,10 +29,14 @@ export const updateMailStatus = asyncHandler(async (req, res) => {
         fields.status = false;
         fields.delivery_status = "failed";
         fields.sent_at = null;
+    } else if (delivery_status === "opened") {
+        fields.status = true;
+        fields.delivery_status = "opened";
+        fields.sent_at = toMysqlDateTime(sent_at || mail.sent_at || new Date());
     } else if (delivery_status === "sent" || status === true || status === 1 || status === "sent") {
         fields.status = true;
-        fields.delivery_status = "sent";
-        fields.sent_at = toMysqlDateTime(sent_at || new Date());
+        fields.delivery_status = mail.delivery_status === "opened" ? "opened" : "sent";
+        fields.sent_at = toMysqlDateTime(sent_at || mail.sent_at || new Date());
     } else if (delivery_status === "pending") {
         fields.status = false;
         fields.delivery_status = "pending";
@@ -40,8 +44,8 @@ export const updateMailStatus = asyncHandler(async (req, res) => {
     } else if (status !== undefined) {
         fields.status = Boolean(status);
         if (fields.status) {
-            fields.delivery_status = "sent";
-            fields.sent_at = toMysqlDateTime(sent_at || new Date());
+            fields.delivery_status = mail.delivery_status === "opened" ? "opened" : "sent";
+            fields.sent_at = toMysqlDateTime(sent_at || mail.sent_at || new Date());
         }
     }
 

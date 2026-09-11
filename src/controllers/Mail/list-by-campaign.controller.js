@@ -2,6 +2,8 @@ import { Campaign } from "../../models/campaign.model.js";
 import { Mail } from "../../models/mail.model.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
+import { getPublicApiUrl } from "../../utils/urlHelper.js";
+import { env } from "../../config/env.js";
 
 export const listMailsByCampaign = asyncHandler(async (req, res) => {
     const campaignId = req.params.id;
@@ -27,19 +29,42 @@ export const listMailsByCampaign = asyncHandler(async (req, res) => {
         return res.status(404).json({ error: `Campaign with ID "${campaignId}" was not found in the database.` });
     }
 
-    const apiBaseUrl = (
-        process.env.PUBLIC_API_URL ||
-        process.env.VITE_BACKEND_URL ||
-        `${req.protocol}://${req.get("host")}`
-    ).replace(/\/$/, "");
+    const apiBaseUrl = await getPublicApiUrl(req);
+
+    const senderEmail = (
+        campaign.sender_email ||
+        campaign.senderEmail ||
+        campaign.workMail ||
+        req.user?.email ||
+        env.novaSenderEmail ||
+        "nova@yourdomain.com"
+    ).trim();
+
+    const senderName = (
+        campaign.sender_name ||
+        campaign.senderName ||
+        req.user?.fullName ||
+        env.novaSenderName ||
+        "NOVA AI"
+    ).trim();
 
     const data = await Mail.findByCampaignId(campaign.id);
     const enrichedData = data.map((item) => {
         const rendered = renderCampaignEmail({
             subject: campaign.subject || `Campaign: ${campaign.title}`,
             body: campaign.body || "",
-            recipient: item,
-            campaign,
+            recipient: {
+                ...item,
+                recipientName: item.full_name,
+                recipientEmail: item.email,
+            },
+            campaign: {
+                ...campaign,
+                sender_name: senderName,
+                senderName: senderName,
+                sender_email: senderEmail,
+                senderEmail: senderEmail,
+            },
             mailId: item.id,
             apiBaseUrl,
             enableTracking: true,
@@ -47,9 +72,13 @@ export const listMailsByCampaign = asyncHandler(async (req, res) => {
 
         return {
             ...item,
+            recipientName: item.full_name || "",
+            recipientEmail: item.email || "",
             subject: rendered.subject,
             body: rendered.text,
             html: rendered.html,
+            senderEmail,
+            senderName,
             workMail: campaign.workMail || "",
             campaign_title: campaign.title || "",
         };

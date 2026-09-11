@@ -12,11 +12,13 @@ import { listCampaignRecipients } from "../controllers/CampaignRecipient/list.co
 import { addCampaignRecipients } from "../controllers/CampaignRecipient/add.controller.js";
 import { removeCampaignRecipient } from "../controllers/CampaignRecipient/remove.controller.js";
 import { previewCampaign } from "../controllers/Campaign/preview.controller.js";
+import { getCampaignAnalytics } from "../controllers/Campaign/analytics.controller.js";
 
 const router = Router();
 
 router.get("/list", authenticate, listCampaigns);
 router.post("/create", authenticate, createCampaign);
+router.get("/:campaignId/analytics", authenticate, getCampaignAnalytics);
 router.get("/:campaignId/recipients", authenticate, listCampaignRecipients);
 router.post("/:campaignId/recipients", authenticate, addCampaignRecipients);
 router.delete("/:campaignId/recipients/:contactId", authenticate, removeCampaignRecipient);

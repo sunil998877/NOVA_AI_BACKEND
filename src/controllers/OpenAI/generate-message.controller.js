@@ -22,13 +22,15 @@ export const generateMessage = asyncHandler(async (req, res) => {
         return res.status(500).json({ error: "OPENAI_API_KEY is not configured" });
     }
 
-    const signature = req.user.fullName
-        ? `If you generate an email draft, end with: "Best regards, ${req.user.fullName}${req.user.organization ? `, ${req.user.organization}` : ""}".`
-        : "";
+    const rawOrg = String(req.user.organization || "").trim();
+    const cleanOrg = rawOrg.toLowerCase() === "independent" ? "" : rawOrg;
+
+    const formatInstructions =
+        'If you generate an email draft, start with the greeting "Hello {{recipientName}}," and conclude with the closing signature "Best regards,<br>{{senderName}}". NEVER place recipientName, full_name, or any recipient variable after "Best regards".';
 
     const systemMessage = {
         role: "system",
-        content: `You are NOVA, an expert email marketing copywriter. ${signature}`,
+        content: `You are NOVA, an expert email marketing copywriter. ${formatInstructions}`,
     };
 
     let aiMessages = [systemMessage];

@@ -103,6 +103,7 @@ app.use("/api/google-sheets", sheetsRoutes);
 app.use("/api/influencers", influencerRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/track", trackRoutes);
+app.use("/api/tracking", trackRoutes);
 
 
 app.use((err, _req, res, _next) => {

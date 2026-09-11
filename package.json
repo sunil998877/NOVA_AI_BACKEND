@@ -11,7 +11,8 @@
     "test": "node --test",
     "check": "node --check src/server.js",
     "start": "node src/server.js",
-    "dev": "nodemon --exec node src/server.js"
+    "dev": "nodemon --exec node src/server.js",
+    "tunnel": "ngrok http 3001"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

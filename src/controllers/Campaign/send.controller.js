@@ -6,6 +6,7 @@ import { audit } from "../../utils/audit.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { signCampaignSendToken } from "../../utils/campaign-send-token.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
+import { getPublicApiUrl } from "../../utils/urlHelper.js";
 
 async function callN8nWebhook(payload) {
     const webhookUrl = env.n8nWebhookUrl;
@@ -46,14 +47,16 @@ async function callN8nWebhook(payload) {
     }
 
     const firstRecipient = (payload.recipients && payload.recipients[0]) || {};
+    const effectiveSenderName = payload.senderName || env.novaSenderName;
+    const effectiveSenderEmail = payload.senderEmail || env.novaSenderEmail;
     const query = new URLSearchParams({
         campaignId: String(payload.campaignId),
         action: payload.action || "start_campaign",
         timestamp: payload.timestamp || new Date().toISOString(),
         totalRecipients: String(payload.totalRecipients ?? 0),
-        senderEmail: payload.senderEmail || env.novaSenderEmail,
-        senderName: payload.senderName || env.novaSenderName,
-        from: payload.from || `"${env.novaSenderName}" <${env.novaSenderEmail}>`,
+        senderEmail: effectiveSenderEmail,
+        senderName: effectiveSenderName,
+        from: payload.from || `"${effectiveSenderName}" <${effectiveSenderEmail}>`,
     });
     if (payload.subject) query.set("subject", payload.subject);
     if (payload.body) query.set("body", payload.body);
@@ -61,18 +64,22 @@ async function callN8nWebhook(payload) {
     if (payload.accessToken) query.set("accessToken", payload.accessToken);
     if (payload.apiBaseUrl) query.set("apiBaseUrl", payload.apiBaseUrl);
 
-    if (firstRecipient.email) {
-        query.set("to", firstRecipient.email);
-        query.set("email", firstRecipient.email);
-        query.set("recipientEmail", firstRecipient.email);
-        if (firstRecipient.full_name) query.set("recipientName", firstRecipient.full_name);
+    if (firstRecipient.email || firstRecipient.recipientEmail) {
+        const toEmail = firstRecipient.email || firstRecipient.recipientEmail;
+        const toName = firstRecipient.recipientName || firstRecipient.full_name || "";
+        query.set("to", toEmail);
+        query.set("email", toEmail);
+        query.set("recipientEmail", toEmail);
+        if (toName) query.set("recipientName", toName);
     }
 
     if (payload.recipients) {
         const compact = payload.recipients.map((r) => ({
             id: r.id,
-            email: r.email,
-            full_name: r.full_name || "",
+            email: r.email || r.recipientEmail,
+            recipientEmail: r.recipientEmail || r.email,
+            full_name: r.full_name || r.recipientName || "",
+            recipientName: r.recipientName || r.full_name || "",
         }));
         query.set("recipients", JSON.stringify(compact));
     }
@@ -136,7 +143,7 @@ export const sendCampaign = asyncHandler(async (req, res) => {
     }
 
     const rawSubject = campaign.subject || `Campaign: ${campaign.title}`;
-    const rawBody = campaign.body || `Hello,\n\nThis is ${campaign.title}.\n\nBest regards,\nNOVA`;
+    const rawBody = campaign.body || `Hello {{recipientName}},\n\nThis is ${campaign.title}.\n\nBest regards,<br>{{senderName}}`;
 
     await Campaign.updateById(campaign.id, {
         status: "processing",
@@ -151,14 +158,27 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         userId: req.user.id,
     });
 
-    const apiBaseUrl = (
-        process.env.PUBLIC_API_URL ||
-        process.env.VITE_BACKEND_URL ||
-        `${req.protocol}://${req.get("host")}`
-    ).replace(/\/$/, "");
+    const apiBaseUrl = await getPublicApiUrl(req);
 
-    const senderEmail = env.novaSenderEmail || "nova@yourdomain.com";
-    const senderName = env.novaSenderName || "NOVA AI";
+    const senderEmail = (
+        campaign.sender_email ||
+        campaign.senderEmail ||
+        req.body?.senderEmail ||
+        campaign.workMail ||
+        req.user?.email ||
+        env.novaSenderEmail ||
+        "nova@yourdomain.com"
+    ).trim();
+
+    const senderName = (
+        campaign.sender_name ||
+        campaign.senderName ||
+        req.body?.senderName ||
+        req.user?.fullName ||
+        env.novaSenderName ||
+        "NOVA AI"
+    ).trim();
+
     const fromAddress = `"${senderName}" <${senderEmail}>`;
 
     const renderedRecipients = recipients.map((mail) => {
@@ -168,31 +188,30 @@ export const sendCampaign = asyncHandler(async (req, res) => {
             recipient: {
                 id: mail.id,
                 email: mail.email,
+                recipientEmail: mail.email,
                 full_name: mail.full_name,
-
-
-
+                recipientName: mail.full_name,
             },
-
-
-
             campaign: {
                 id: campaign.id,
                 title: campaign.title,
                 sender_name: senderName,
+                senderName: senderName,
                 sender_email: senderEmail,
+                senderEmail: senderEmail,
+                workMail: campaign.workMail,
             },
             mailId: mail.id,
             apiBaseUrl,
             enableTracking: true,
         });
 
-
-
         return {
             id: mail.id,
             email: mail.email,
+            recipientEmail: mail.email,
             full_name: mail.full_name || "",
+            recipientName: mail.full_name || "",
             campaign_id: campaign.id,
             subject: rendered.subject,
             body: rendered.text,

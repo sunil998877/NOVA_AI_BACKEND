@@ -58,7 +58,7 @@ export const Mail = {
             `UPDATE ${table}
              SET status = 1, delivery_status = 'sent', sent_at = ?
              WHERE campaign_id = ?
-               AND delivery_status <> 'failed'
+               AND delivery_status NOT IN ('failed', 'opened')
                AND status = 0
                AND sent_at IS NULL`,
             [sentAt, campaignId]

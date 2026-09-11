@@ -73,6 +73,38 @@ async function migrateMailDeliveryStatus(pool) {
     }
 }
 
+async function migrateTrackingColumns(pool) {
+    try {
+        const [rows] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mails'
+               AND COLUMN_NAME IN ('click_count', 'first_opened_at', 'last_opened_at')`
+        );
+        const existing = new Set(rows.map((row) => row.COLUMN_NAME));
+        if (!existing.has("click_count")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN click_count INT NOT NULL DEFAULT 0 AFTER open_count`);
+        }
+        if (!existing.has("first_opened_at")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN first_opened_at DATETIME NULL AFTER click_count`);
+        }
+        if (!existing.has("last_opened_at")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN last_opened_at DATETIME NULL AFTER first_opened_at`);
+        }
+    } catch (error) {
+        console.error("Could not migrate mails tracking columns:", error.message);
+    }
+}
+
+async function cleanIndependentOrganization(pool) {
+    try {
+        await pool.query(
+            `UPDATE users SET organization = '' WHERE LOWER(TRIM(organization)) = 'independent'`
+        );
+    } catch (error) {
+        console.error("Could not clean up independent organization:", error.message);
+    }
+}
+
 export const connectDb = async () => {
     const { host, port, user, password, database } = env.mysql;
 
@@ -103,6 +135,8 @@ export const connectDb = async () => {
 
         await migrateCampaignCopyColumns(pool);
         await migrateMailDeliveryStatus(pool);
+        await migrateTrackingColumns(pool);
+        await cleanIndependentOrganization(pool);
 
         console.log(`Connected to MySQL successfully (${database})`);
         return pool;
@@ -116,3 +150,5 @@ export const connectDb = async () => {
         process.exit(1);
     }
 };
+
+export default connectDb;

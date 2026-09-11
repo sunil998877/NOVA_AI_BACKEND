@@ -43,10 +43,12 @@ export const Campaign = {
 
     async create(data) {
         const result = await execute(
-            `INSERT INTO ${table} (title, workMail, followups, camp_status, scheduledDate, status, subject, body, user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${table} (title, sender_name, sender_email, workMail, followups, camp_status, scheduledDate, status, subject, body, user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 data.title,
+                data.sender_name ?? data.senderName ?? null,
+                data.sender_email ?? data.senderEmail ?? null,
                 data.workMail ?? null,
                 data.followups ?? "0",
                 data.camp_status ?? "Pending",

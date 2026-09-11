@@ -1,11 +1,10 @@
 import { marked } from "marked";
-
+import { env } from "../config/env.js";
 
 marked.setOptions({
   gfm: true,
   breaks: true,
 });
-
 
 export function sanitizeHtml(html) {
   if (!html || typeof html !== "string") return "";
@@ -19,20 +18,46 @@ export function sanitizeHtml(html) {
     .replace(/javascript:[^"']*/gi, "#");
 }
 
-
 export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
   if (!text || typeof text !== "string") return "";
 
-  const fullName = (recipient.full_name || recipient.fullName || recipient.name || "").trim();
+  const fullName = (
+    recipient.recipientName ||
+    recipient.recipient_name ||
+    recipient.full_name ||
+    recipient.fullName ||
+    recipient.name ||
+    ""
+  ).trim();
   const firstName = fullName ? fullName.split(/\s+/)[0] : "";
-  const email = (recipient.email || "").trim();
-  const organization = (recipient.organization || campaign.organization || "NOVA").trim();
+  const email = (
+    recipient.recipientEmail ||
+    recipient.recipient_email ||
+    recipient.email ||
+    ""
+  ).trim();
+  const rawOrg = (recipient.organization || campaign.organization || "").trim();
+  const organization = rawOrg.toLowerCase() === "independent" ? "NOVA" : (rawOrg || "NOVA");
   const campaignTitle = (campaign.title || campaign.campaign_name || "Campaign").trim();
-  const senderName = (campaign.sender_name || campaign.workMail || "Sunil Kumar").trim();
+  const fallbackSenderName = (env?.novaSenderName || "NOVA AI").trim();
+  const senderName = (
+    campaign.senderName ||
+    campaign.sender_name ||
+    campaign.sender ||
+    campaign.fromName ||
+    campaign.workMail ||
+    recipient.senderName ||
+    recipient.sender_name ||
+    fallbackSenderName
+  ).trim();
 
   let resolved = text;
 
-  // 1. Specific recipient name placeholders
+
+  const signatureRecipientPattern = /(Best\s+regards,?\s*(?:<br\s*\/?>)?\s*)(?:\{\{\s*(?:recipient_name|recipientName|full_name|fullName|name)\s*\}\}|\[\s*Recipient(?:'s)?\s*Name\s*\]|\[\s*Recipient\s*\])/gi;
+  resolved = resolved.replace(signatureRecipientPattern, (match, prefix) => `${prefix}{{senderName}}`);
+
+
   const namePatterns = [
     /\{\{\s*(?:recipient_name|recipientName|full_name|fullName|name)\s*\}\}/gi,
     /\[\s*Recipient(?:'s)?\s*Name\s*\]/gi,
@@ -46,13 +71,13 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
     resolved = resolved.replace(pattern, greetingFallback);
   }
 
-  // 2. First name placeholders
+
   resolved = resolved.replace(/\{\{\s*(?:first_name|firstName)\s*\}\}/gi, firstName || "there");
 
-  // 3. Email placeholders
-  resolved = resolved.replace(/\{\{\s*email\s*\}\}/gi, email);
 
-  // 4. Company / Organization placeholders
+  resolved = resolved.replace(/\{\{\s*(?:recipient_email|recipientEmail|email)\s*\}\}/gi, email);
+
+
   const companyPatterns = [
     /\{\{\s*(?:company|organization|org)\s*\}\}/gi,
     /\[\s*(?:Company|Organization)\s*Name\s*\]/gi,
@@ -61,34 +86,37 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
     resolved = resolved.replace(pattern, organization || "your company");
   }
 
-  // 5. Campaign Title placeholders
+
   resolved = resolved.replace(/\{\{\s*campaign_title\s*\}\}/gi, campaignTitle);
 
-  // 6. Sender name placeholders
+
   const senderPatterns = [
     /\{\{\s*(?:sender_name|senderName)\s*\}\}/gi,
     /\[\s*Your\s*Name\s*\]/gi,
-    /\[\s*Sender\s*Name\s*\]/gi,
+    /\[\s*Sender(?:'s)?\s*Name\s*\]/gi,
+    /\[\s*Sender\s*\]/gi,
   ];
   for (const pattern of senderPatterns) {
     resolved = resolved.replace(pattern, senderName);
   }
 
-  // 7. Clean up any lingering square-bracketed prompt artifacts like [Insert Link], [Your Title], etc.
+
   resolved = resolved.replace(/\[\s*Insert\s*Link\s*\]/gi, "Click here");
   resolved = resolved.replace(/\[\s*(?:Your\s*Title|Title)\s*\]/gi, "Team");
   resolved = resolved.replace(/\[\s*(?:Product|Service)\s*Name\s*\]/gi, campaignTitle || "our services");
 
+
+  resolved = resolved.replace(/,\s*independent(?=[ \t]*(?:\r?\n|$))/gi, "");
+  resolved = resolved.replace(/^[ \t]*independent[ \t]*(?:\r?\n|$)/gim, "");
+
   return resolved;
 }
 
-/**
- * Enhances standard markdown HTML output with email-safe inline styles and button CTAs
- */
+
 function applyEmailInlineStyles(html) {
   let styled = html;
 
-  // Headings
+
   styled = styled.replace(
     /<h1>/gi,
     '<h1 style="margin: 0 0 16px 0; color: #111827; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 24px; font-weight: 700; line-height: 1.3; letter-spacing: -0.3px;">'
@@ -102,13 +130,13 @@ function applyEmailInlineStyles(html) {
     '<h3 style="margin: 16px 0 10px 0; color: #374151; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 17px; font-weight: 600; line-height: 1.4;">'
   );
 
-  // Paragraphs
+
   styled = styled.replace(
     /<p>/gi,
     '<p style="margin: 0 0 16px 0; color: #374151; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.65; word-break: break-word;">'
   );
 
-  // Bullet Lists (clean email-safe indentation and bullets)
+
   styled = styled.replace(
     /<ul>/gi,
     '<ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.6;">'
@@ -122,7 +150,7 @@ function applyEmailInlineStyles(html) {
     '<li style="margin-bottom: 8px; padding-left: 4px;">'
   );
 
-  // Strong & Emphasis
+
   styled = styled.replace(
     /<strong>/gi,
     '<strong style="color: #111827; font-weight: 600;">'
@@ -132,23 +160,23 @@ function applyEmailInlineStyles(html) {
     '<em style="color: #4b5563;">'
   );
 
-  // Blockquotes
+
   styled = styled.replace(
     /<blockquote>/gi,
     '<blockquote style="margin: 0 0 20px 0; padding: 12px 18px; border-left: 4px solid #ef5a2e; background-color: #fef7f5; color: #4b5563; font-style: italic; border-radius: 0 8px 8px 0;">'
   );
 
-  // Horizontal rules
+
   styled = styled.replace(
     /<hr\s*\/?>/gi,
     '<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />'
   );
 
-  // Convert CTA links (e.g. [CTA: Button](url) or prominent standalone links) into email-safe buttons
+
   styled = styled.replace(
     /<p>\s*<a\s+href="([^"]+)"(?:\s+[^>]*)?>\s*(?:CTA:\s*)?([^<]+?)\s*<\/a>\s*<\/p>/gi,
     (match, url, label) => {
-      // If label looks like action button text (or <= 40 chars)
+
       if (label.length <= 50 && !/^https?:\/\//i.test(label)) {
         return `
         <table border="0" cellpadding="0" cellspacing="0" role="presentation" style="margin: 22px 0;">
@@ -165,7 +193,7 @@ function applyEmailInlineStyles(html) {
     }
   );
 
-  // Standard inline links
+
   styled = styled.replace(
     /<a\s+(?!style=)(href="[^"]+")/gi,
     '<a $1 style="color: #ef5a2e; font-weight: 500; text-decoration: underline;" target="_blank"'
@@ -174,29 +202,33 @@ function applyEmailInlineStyles(html) {
   return styled;
 }
 
-/**
- * Rewrites <a href="..."> links for click tracking
- */
-export function wrapClickTracking(html, mailId, apiBaseUrl) {
-  if (!html || !mailId || !apiBaseUrl) return html;
-  const trackingEndpoint = `${apiBaseUrl.replace(/\/$/, "")}/api/track/click/${mailId}`;
+export function wrapClickTracking(html, campaignId, recipientId, apiBaseUrl) {
+  let cId = campaignId;
+  let rId = recipientId;
+  let base = apiBaseUrl;
+  if (!base && typeof rId === "string" && (rId.startsWith("http://") || rId.startsWith("https://"))) {
+    base = rId;
+    rId = cId;
+    cId = null;
+  }
+  if (!html || !rId || !base) return html;
+  const endpoint = cId
+    ? `${base.replace(/\/$/, "")}/api/tracking/click/${cId}/${rId}`
+    : `${base.replace(/\/$/, "")}/api/tracking/click/${rId}`;
 
-  return html.replace(/<a\s+([^>]*?)href="([^"]+)"([^>]*?)>/gi, (match, prefix, href, suffix) => {
-    // Do not track mailto, tel, anchors or tracking links
-    if (/^(mailto:|tel:|#|\/api\/track)/i.test(href)) {
+  return html.replace(/<a\s+([^>]*?)href=(["'])(.*?)\2([^>]*?)>/gi, (match, prefix, quote, href, suffix) => {
+    if (/^(mailto:|tel:|#|javascript:|\/api\/track|\/api\/tracking)/i.test(href)) {
       return match;
     }
-    const trackedHref = `${trackingEndpoint}?url=${encodeURIComponent(href)}`;
+    const trackedHref = `${endpoint}?url=${encodeURIComponent(href)}`;
     return `<a ${prefix}href="${trackedHref}"${suffix}>`;
   });
 }
 
-/**
- * Generates email-safe plain text fallback from markdown
- */
 export function generatePlainText(text, recipient = {}, campaign = {}) {
   const resolved = resolvePlaceholders(text, recipient, campaign);
   return resolved
+    .replace(/<br\s*\/?>/gi, "\n")
     .replace(/^#+\s+/gm, "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
@@ -208,9 +240,6 @@ export function generatePlainText(text, recipient = {}, campaign = {}) {
     .trim();
 }
 
-/**
- * Renders the full responsive HTML email template
- */
 export function renderCampaignEmail({
   subject = "",
   body = "",
@@ -220,33 +249,37 @@ export function renderCampaignEmail({
   apiBaseUrl = "",
   enableTracking = true,
 }) {
-  // 1. Resolve variables in subject and body
   const resolvedSubject = resolvePlaceholders(subject, recipient, campaign);
   const resolvedBodyMarkdown = resolvePlaceholders(body, recipient, campaign);
 
-  // 2. Convert markdown to HTML
-  const rawHtml = marked.parse(resolvedBodyMarkdown);
+  const normalizedBodyMarkdown = resolvedBodyMarkdown.replace(/<br\s*\/?>\s*\n/gi, "<br>");
+
+  const rawHtml = marked.parse(normalizedBodyMarkdown);
   const sanitizedHtml = sanitizeHtml(rawHtml);
   let styledBody = applyEmailInlineStyles(sanitizedHtml);
 
-  // 3. Apply click tracking if mailId and apiBaseUrl are provided
-  if (enableTracking && mailId && apiBaseUrl) {
-    styledBody = wrapClickTracking(styledBody, mailId, apiBaseUrl);
+  const campaignId = campaign.id || campaign._id;
+  const recipientId = recipient.id || recipient._id || mailId;
+
+  if (enableTracking && recipientId && apiBaseUrl) {
+    styledBody = wrapClickTracking(styledBody, campaignId, recipientId, apiBaseUrl);
   }
 
-  // 4. Build open tracking pixel
   let trackingPixel = "";
-  if (enableTracking && mailId && apiBaseUrl) {
-    const trackingUrl = `${apiBaseUrl.replace(/\/$/, "")}/api/track/open/${mailId}`;
-    trackingPixel = `<img src="${trackingUrl}" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:none;outline:none;max-height:0;max-width:0;opacity:0;" />`;
+  if (enableTracking && recipientId && apiBaseUrl) {
+    const trackingUrl = campaignId
+      ? `${apiBaseUrl.replace(/\/$/, "")}/api/tracking/open/${campaignId}/${recipientId}`
+      : `${apiBaseUrl.replace(/\/$/, "")}/api/tracking/open/${recipientId}`;
+    trackingPixel = `<img src="${trackingUrl}" alt="" width="1" height="1" border="0" style="display:block!important;height:1px!important;width:1px!important;border:0!important;margin:0!important;padding:0!important;min-height:1px!important;min-width:1px!important;" />`;
   }
 
-  const recipientEmail = recipient.email || "recipient";
+  const recipientEmail = recipient.recipientEmail || recipient.recipient_email || recipient.email || "recipient";
   const campaignName = campaign.title || campaign.campaign_name || "NOVA Campaign";
-  const organization = campaign.organization || "NOVA AI";
+  const orgFooter = (campaign.organization || "").trim();
+  const organization = orgFooter.toLowerCase() === "independent" ? "NOVA AI" : (orgFooter || "NOVA AI");
   const currentYear = new Date().getFullYear();
 
-  // 5. Full responsive HTML template
+
   const fullHtml = `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -329,7 +362,7 @@ export function renderCampaignEmail({
 </body>
 </html>`;
 
-  // 6. Plain text version
+
   const plainText = generatePlainText(body, recipient, campaign);
 
   return {
