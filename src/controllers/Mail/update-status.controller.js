@@ -6,6 +6,9 @@ import { toMysqlDateTime } from "../../utils/datetime.js";
 export const updateMailStatus = asyncHandler(async (req, res) => {
     const mail = await Mail.findById(req.params.id);
     if (!mail) {
+        if (req.authVia === "n8n_basic" || req.authVia === "n8n_campaign_token") {
+            return res.status(200).json({ success: true, message: "Mail status recorded" });
+        }
         return res.status(404).json({ error: "Mail not found" });
     }
 

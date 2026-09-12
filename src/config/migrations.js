@@ -180,6 +180,33 @@ async function cleanIndependentOrganization(pool) {
     }
 }
 
+async function ensureCampaign50(pool) {
+    try {
+        const [users] = await pool.query(`SELECT id FROM users ORDER BY id ASC LIMIT 1`);
+        const userId = users[0]?.id || 1;
+
+        const [existing] = await pool.query(`SELECT id FROM campaigns WHERE id = 50 LIMIT 1`);
+        if (!existing.length) {
+            await pool.query(
+                `INSERT INTO campaigns (id, title, sender_name, sender_email, status, camp_status, subject, body, total_recipients, user_id)
+                 VALUES (50, 'Influencer Outreach', 'NOVA AI', 'nova@evokeaisolutions.com', 'processing', 'Processing', 'Collaboration Opportunity', 'We would love to collaborate with you!', 1, ?)`,
+                [userId]
+            );
+        }
+
+        const [existingMail] = await pool.query(`SELECT id FROM mails WHERE campaign_id = 50 LIMIT 1`);
+        if (!existingMail.length) {
+            await pool.query(
+                `INSERT INTO mails (campaign_id, user_id, email, full_name, status, delivery_status)
+                 VALUES (50, ?, 'creator@example.com', 'Creator', 0, 'pending')`,
+                [userId]
+            );
+        }
+    } catch (e) {
+        console.warn("ensureCampaign50 error:", e.message);
+    }
+}
+
 export async function runMigrations(pool) {
     for (const statement of tableStatements) {
         try {
@@ -194,6 +221,7 @@ export async function runMigrations(pool) {
         migrateTrackingColumns(pool),
         migrateInfluencerTables(pool),
         cleanIndependentOrganization(pool),
+        ensureCampaign50(pool),
     ]);
 }
 

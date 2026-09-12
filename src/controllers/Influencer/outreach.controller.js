@@ -1,4 +1,6 @@
 import nodemailer from "nodemailer";
+import { Campaign } from "../../models/campaign.model.js";
+import { Mail } from "../../models/mail.model.js";
 import { Influencer } from "../../models/influencer.model.js";
 import { Collaboration } from "../../models/collaboration.model.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
@@ -220,7 +222,32 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
         } catch (_) {}
     }
 
-    const campaignId = resolvedInfluencerId || Date.now();
+    let createdCamp = null;
+    let createdMail = null;
+    try {
+        createdCamp = await Campaign.create({
+            title: `Outreach to ${creatorName}`,
+            sender_name: senderName,
+            sender_email: senderEmail,
+            subject: cleanSubject,
+            body: cleanMessage,
+            status: "processing",
+            camp_status: "Processing",
+            user_id: req.user.id,
+        });
+
+        if (createdCamp?.id) {
+            createdMail = await Mail.create({
+                campaign_id: createdCamp.id,
+                email: recipientEmail,
+                full_name: creatorName,
+                status: 0,
+                delivery_status: "pending",
+            });
+        }
+    } catch (_) {}
+
+    const campaignId = createdCamp?.id || resolvedInfluencerId || Date.now();
     let accessToken = "";
     try {
         accessToken = signCampaignSendToken({
@@ -235,7 +262,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     } catch (_) {}
 
     const recipient = {
-        id: resolvedInfluencerId || 1,
+        id: createdMail?.id || resolvedInfluencerId || 1,
         email: recipientEmail,
         recipientEmail,
         full_name: creatorName,
@@ -303,6 +330,23 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
                 details: n8nError || smtpErr.message,
             });
         }
+    }
+
+    if (createdCamp?.id) {
+        try {
+            await Campaign.updateById(createdCamp.id, {
+                status: "sent",
+                camp_status: "Sent",
+                sent_count: 1,
+            });
+            if (createdMail?.id) {
+                await Mail.updateById(createdMail.id, {
+                    status: 1,
+                    delivery_status: "sent",
+                    sent_at: new Date(),
+                });
+            }
+        } catch (_) {}
     }
 
     const collaboration = await Collaboration.create({
