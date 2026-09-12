@@ -9,7 +9,7 @@ export const emailEventSchema = {
         recipientId INT NOT NULL,
         eventType ENUM('open', 'click') NOT NULL,
         url TEXT NULL,
-        timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         userAgent TEXT NULL,
         ipAddress VARCHAR(64) NULL,
         INDEX idx_ee_campaign (campaignId),

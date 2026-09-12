@@ -8,8 +8,8 @@ export const contactSchema = {
         email VARCHAR(255) NOT NULL,
         company VARCHAR(255) NULL,
         status VARCHAR(32) NOT NULL DEFAULT 'active',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY uq_contacts_email (email),
         INDEX idx_contacts_email (email),
         INDEX idx_contacts_name (name)

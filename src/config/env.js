@@ -1,12 +1,11 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+
 const parseOrigins = (value) => {
     const defaultOrigins = [
         "http://localhost:5173",
-        "http://localhost:3000",
         "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
         "https://salmon-spoonbill-632915.hostingersite.com",
     ];
     const cleaned = String(value || "").replace(/^["']|["']$/g, "");
@@ -76,6 +75,9 @@ export const env = {
     novaSenderEmail: (process.env.NOVA_SENDER_EMAIL || "nova@yourdomain.com").replace(/^["']|["']$/g, "").trim(),
     novaSenderName: (process.env.NOVA_SENDER_NAME || "NOVA AI").replace(/^["']|["']$/g, "").trim(),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
+    youtubeApiKey: (process.env.YOUTUBE_API_KEY || "").trim(),
+    instagramApiKey: (process.env.INSTAGRAM_API_KEY || process.env.RAPIDAPI_KEY || "").trim(),
+    twitterBearerToken: (process.env.TWITTER_BEARER_TOKEN || "").trim(),
 };
 
 if (env.nodeEnv === "production") {

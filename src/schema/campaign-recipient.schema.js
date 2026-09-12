@@ -7,7 +7,7 @@ export const campaignRecipientSchema = {
         contact_id INT NOT NULL,
         status VARCHAR(32) NOT NULL DEFAULT 'pending',
         sent_at DATETIME NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_cr_campaign_contact (campaign_id, contact_id),
         INDEX idx_cr_campaign (campaign_id),
         INDEX idx_cr_contact (contact_id),

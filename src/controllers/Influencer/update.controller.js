@@ -7,34 +7,12 @@ export const updateInfluencer = asyncHandler(async (req, res) => {
         return res.status(404).json({ error: "Influencer not found" });
     }
 
-    const {
-        name,
-        handle,
-        platform,
-        followers,
-        engagement,
-        niche,
-        location,
-        avatar,
-        verified,
+    const { status, notes, lastContact, email } = req.body;
+    const updated = await Influencer.updateStatus(existing.id, req.user.id, {
         status,
         notes,
         lastContact,
-    } = req.body;
-
-    const updated = await Influencer.updateById(existing.id, {
-        name,
-        handle,
-        platform,
-        followers,
-        engagement,
-        niche,
-        location,
-        avatar,
-        verified,
-        status,
-        notes,
-        lastContact,
+        email,
     });
 
     return res.status(200).json(updated);
