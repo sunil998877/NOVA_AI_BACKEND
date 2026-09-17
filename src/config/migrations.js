@@ -100,7 +100,7 @@ async function migrateInfluencerTables(pool) {
             if (colSet.has("handle")) {
                 try {
                     await pool.query(`UPDATE influencers SET username = handle WHERE username IS NULL AND handle IS NOT NULL`);
-                } catch (_) {}
+                } catch (_) { }
             }
         }
         if (!colSet.has("email")) {
@@ -111,7 +111,7 @@ async function migrateInfluencerTables(pool) {
             if (colSet.has("avatar")) {
                 try {
                     await pool.query(`UPDATE influencers SET profile_image = avatar WHERE profile_image IS NULL AND avatar IS NOT NULL`);
-                } catch (_) {}
+                } catch (_) { }
             }
         }
         if (!colSet.has("profile_url")) {
@@ -122,7 +122,7 @@ async function migrateInfluencerTables(pool) {
             if (colSet.has("followers")) {
                 try {
                     await pool.query(`UPDATE influencers SET subscribers = CAST(followers AS UNSIGNED) WHERE subscribers IS NULL AND followers REGEXP '^[0-9]+$'`);
-                } catch (_) {}
+                } catch (_) { }
             }
         }
         if (!colSet.has("video_count")) {
@@ -131,26 +131,46 @@ async function migrateInfluencerTables(pool) {
         if (!colSet.has("view_count")) {
             await pool.query(`ALTER TABLE influencers ADD COLUMN view_count BIGINT NULL`);
         }
-        if (!colSet.has("description")) {
-            await pool.query(`ALTER TABLE influencers ADD COLUMN description TEXT NULL`);
-            if (colSet.has("niche")) {
-                try {
-                    await pool.query(`UPDATE influencers SET description = niche WHERE description IS NULL AND niche IS NOT NULL`);
-                } catch (_) {}
-            }
+        if (!colSet.has("category")) {
+            await pool.query(`ALTER TABLE influencers ADD COLUMN category VARCHAR(100) NULL DEFAULT 'General' AFTER location`);
         }
 
         try {
-            await pool.query(`UPDATE influencers SET platform_user_id = COALESCE(NULLIF(username, ''), CONCAT(platform, '_', id)) WHERE platform_user_id IS NULL OR platform_user_id = ''`);
+            const [myCols] = await pool.query(
+                `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my_influencers'`
+            );
+            const myColSet = new Set(myCols.map((r) => r.COLUMN_NAME));
+            if (!myColSet.has("category")) {
+                await pool.query(`ALTER TABLE my_influencers ADD COLUMN category VARCHAR(100) NULL DEFAULT 'General' AFTER status`);
+            }
+            await pool.query(
+                `UPDATE my_influencers mi
+                 JOIN influencers inf ON inf.id = mi.influencer_id
+                 SET mi.category = 'Fitness'
+                 WHERE (mi.category IS NULL OR mi.category = '' OR mi.category = 'General')
+                   AND (inf.name LIKE '%fitness%' OR inf.name LIKE '%gym%' OR inf.name LIKE '%workout%')`
+            );
+            await pool.query(
+                `UPDATE my_influencers mi
+                 JOIN influencers inf ON inf.id = mi.influencer_id
+                 SET mi.category = 'Technology'
+                 WHERE (mi.category IS NULL OR mi.category = '' OR mi.category = 'General')
+                   AND (inf.name LIKE '%tech%' OR inf.name LIKE '%code%' OR inf.name LIKE '%software%' OR inf.name LIKE '%david park%')`
+            );
         } catch (_) {}
+
+        try {
+            await pool.query(`UPDATE influencers SET platform_user_id = COALESCE(NULLIF(username, ''), CONCAT(platform, '_', id)) WHERE platform_user_id IS NULL OR platform_user_id = ''`);
+        } catch (_) { }
 
         try {
             await pool.query(`ALTER TABLE influencers ADD UNIQUE KEY unique_platform_user (platform, platform_user_id)`);
-        } catch (_) {}
+        } catch (_) { }
 
         try {
             await pool.query(`ALTER TABLE my_influencers MODIFY COLUMN influencer_id INT NOT NULL`);
-        } catch (_) {}
+        } catch (_) { }
 
         if (colSet.has("user_id")) {
             try {
@@ -163,7 +183,7 @@ async function migrateInfluencerTables(pool) {
                     `INSERT IGNORE INTO my_influencers (user_id, influencer_id, status, notes, lastContact, createdAt, updatedAt)
                      SELECT user_id, id, COALESCE(status, 'saved'), notes, lastContact, createdAt, updatedAt FROM influencers WHERE user_id IS NOT NULL`
                 );
-            } catch (_) {}
+            } catch (_) { }
         }
     } catch (error) {
         console.error("Could not migrate influencers tables:", error.message);

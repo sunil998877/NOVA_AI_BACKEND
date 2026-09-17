@@ -203,7 +203,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
                 lastContact: new Date(),
                 email: recipientEmail,
             });
-        } catch (_) {}
+        } catch (_) { }
     } else if (creatorName) {
         try {
             const upserted = await Influencer.upsertAndSave(req.user.id, {
@@ -219,7 +219,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
             if (upserted?.id) {
                 resolvedInfluencerId = upserted.id;
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     let createdCamp = null;
@@ -245,7 +245,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
                 delivery_status: "pending",
             });
         }
-    } catch (_) {}
+    } catch (_) { }
 
     const campaignId = createdCamp?.id || resolvedInfluencerId || Date.now();
     let accessToken = "";
@@ -254,12 +254,12 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
             campaignId,
             userId: req.user.id,
         });
-    } catch (_) {}
+    } catch (_) { }
 
     let apiBaseUrl = "";
     try {
         apiBaseUrl = await getPublicApiUrl(req);
-    } catch (_) {}
+    } catch (_) { }
 
     const recipient = {
         id: createdMail?.id || resolvedInfluencerId || 1,
@@ -346,7 +346,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
                     sent_at: new Date(),
                 });
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     const collaboration = await Collaboration.create({

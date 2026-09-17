@@ -1,7 +1,7 @@
 export const influencerSchema = {
     table: "influencers",
     columns:
-        "id, platform, platform_user_id, name, username, email, description, profile_image, profile_url, subscribers, video_count, view_count, location, createdAt, updatedAt",
+        "id, platform, platform_user_id, name, username, email, description, profile_image, profile_url, subscribers, video_count, view_count, location, category, createdAt, updatedAt",
     updatable: [
         "name",
         "username",
@@ -13,6 +13,7 @@ export const influencerSchema = {
         "video_count",
         "view_count",
         "location",
+        "category",
     ],
     createTable: `CREATE TABLE IF NOT EXISTS influencers (
         id INT AUTO_INCREMENT PRIMARY KEY,

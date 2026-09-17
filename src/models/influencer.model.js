@@ -22,7 +22,8 @@ export const Influencer = {
                         inf.subscribers,
                         inf.video_count,
                         inf.view_count,
-                        inf.location
+                        inf.location,
+                        COALESCE(mi.category, inf.category, 'General') AS category
                  FROM ${myInfTable} mi
                  INNER JOIN ${infTable} inf ON inf.id = mi.influencer_id
                  WHERE mi.user_id = ?
@@ -88,7 +89,8 @@ export const Influencer = {
                         inf.subscribers,
                         inf.video_count,
                         inf.view_count,
-                        inf.location
+                        inf.location,
+                        COALESCE(mi.category, inf.category, 'General') AS category
                  FROM ${myInfTable} mi
                  INNER JOIN ${infTable} inf ON inf.id = mi.influencer_id
                  WHERE (mi.id = ? OR mi.influencer_id = ?) AND mi.user_id = ?
@@ -122,6 +124,7 @@ export const Influencer = {
         const location = data.location || null;
         const status = data.status || "saved";
         const notes = data.notes || null;
+        const category = data.category ? String(data.category).trim() : "General";
 
         let influencerId = null;
 
@@ -234,13 +237,14 @@ export const Influencer = {
         // 3. Upsert into my_influencers table
         try {
             await execute(
-                `INSERT INTO ${myInfTable} (user_id, influencer_id, status, notes)
-                 VALUES (?, ?, ?, ?)
+                `INSERT INTO ${myInfTable} (user_id, influencer_id, status, category, notes)
+                 VALUES (?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     status = VALUES(status),
+                    category = COALESCE(VALUES(category), category),
                     notes = COALESCE(VALUES(notes), notes),
                     updatedAt = CURRENT_TIMESTAMP`,
-                [userId, influencerId, status, notes]
+                [userId, influencerId, status, category, notes]
             );
         } catch (myInfErr) {
             console.warn("my_influencers insert error, checking table creation:", myInfErr.message);
@@ -306,16 +310,21 @@ export const Influencer = {
         };
     },
 
-    async updateStatus(id, userId, { status, notes, lastContact, email }) {
+    async updateStatus(id, userId, fields = {}) {
         const owned = await this.findOwned(id, userId);
         if (!owned) return null;
 
+        const { status, notes, lastContact, email, category } = fields;
         const updates = [];
         const params = [];
 
         if (status) {
             updates.push("status = ?");
             params.push(status);
+        }
+        if (category !== undefined) {
+            updates.push("category = ?");
+            params.push(category);
         }
         if (notes !== undefined) {
             updates.push("notes = ?");
