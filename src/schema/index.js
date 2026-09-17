@@ -10,6 +10,7 @@ import { contactSchema } from "./contact.schema.js";
 import { campaignRecipientSchema } from "./campaign-recipient.schema.js";
 import { emailEventSchema } from "./email-event.schema.js";
 import { collaborationSchema } from "./collaboration.schema.js";
+import { collaborationMessageSchema } from "./collaboration-message.schema.js";
 
 export const schemas = [
     userSchema,
@@ -24,6 +25,7 @@ export const schemas = [
     campaignRecipientSchema,
     emailEventSchema,
     collaborationSchema,
+    collaborationMessageSchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);

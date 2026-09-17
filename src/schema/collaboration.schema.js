@@ -1,7 +1,7 @@
 export const collaborationSchema = {
     table: "collaboration_history",
     columns:
-        "id, user_id, influencer_id, influencer_name, influencer_username, platform, profile_image, profile_url, recipient_email, subject, message, status, delivery_method, createdAt, updatedAt",
+        "id, user_id, influencer_id, influencer_name, influencer_username, platform, profile_image, profile_url, recipient_email, subject, message, status, delivery_method, access_token, whatsapp_number, createdAt, updatedAt",
     createTable: `CREATE TABLE IF NOT EXISTS collaboration_history (
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
@@ -16,8 +16,11 @@ export const collaborationSchema = {
         message TEXT NOT NULL,
         status VARCHAR(64) NOT NULL DEFAULT 'sent',
         delivery_method VARCHAR(64) NOT NULL DEFAULT 'smtp',
+        access_token VARCHAR(64) NULL,
+        whatsapp_number VARCHAR(64) NULL,
         createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_collab_token (access_token),
         INDEX idx_collab_user (user_id),
         INDEX idx_collab_influencer (influencer_id),
         INDEX idx_collab_status (status)

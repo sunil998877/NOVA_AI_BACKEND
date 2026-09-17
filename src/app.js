@@ -13,6 +13,7 @@ import sheetsRoutes from "./routes/sheets.routes.js";
 import influencerRoutes from "./routes/influencer.routes.js";
 import contactRoutes from "./routes/contact.routes.js";
 import trackRoutes from "./routes/track.routes.js";
+import collaborationRoutes from "./routes/collaboration.routes.js";
 
 export const app = express();
 
@@ -104,6 +105,7 @@ app.use("/api/influencers", influencerRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/track", trackRoutes);
 app.use("/api/tracking", trackRoutes);
+app.use("/api/collab", collaborationRoutes);
 
 
 app.use((err, _req, res, _next) => {

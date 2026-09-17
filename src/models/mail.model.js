@@ -119,6 +119,11 @@ export const Mail = {
         return rows.map(mapMail);
     },
 
+    async create(doc) {
+        const rows = await this.insertMany([doc]);
+        return rows[0] || null;
+    },
+
     async updateById(id, fields) {
         const entries = Object.entries(fields).filter(
             ([key, value]) => UPDATABLE.has(key) && value !== undefined

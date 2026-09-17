@@ -109,6 +109,28 @@ export const Influencer = {
         }
     },
 
+    async findById(id) {
+        try {
+            const rows = await query(
+                `SELECT inf.*, COALESCE(mi.category, inf.category, 'General') AS category
+                 FROM ${infTable} inf
+                 LEFT JOIN ${myInfTable} mi ON mi.influencer_id = inf.id
+                 WHERE inf.id = ? OR mi.id = ?
+                 LIMIT 1`,
+                [id, id]
+            );
+            if (!rows.length) return null;
+            const mapped = mapRow(rows[0]);
+            return {
+                ...mapped,
+                followers: mapped.subscribers,
+            };
+        } catch (err) {
+            console.error("findById error:", err.message);
+            return null;
+        }
+    },
+
     async upsertAndSave(userId, data) {
         const platform = String(data.platform || "youtube").toLowerCase();
         const platformUserId = String(data.platformUserId || data.handle || data.name).trim();
@@ -384,5 +406,86 @@ export const Influencer = {
             } catch (_) {}
         }
         return removed;
+    },
+
+    async findById(id) {
+        if (!id) return null;
+        try {
+            const rows = await query(
+                `SELECT inf.id, inf.platform, inf.name, inf.username, inf.email, inf.profile_image, 
+                        inf.profile_url, inf.subscribers, inf.video_count, inf.view_count, inf.location, inf.category
+                 FROM ${infTable} inf
+                 WHERE inf.id = ?
+                 LIMIT 1`,
+                [id]
+            );
+            if (rows && rows.length > 0) {
+                return mapRow(rows[0]);
+            }
+            const myRows = await query(
+                `SELECT inf.id, inf.platform, inf.name, inf.username, inf.email, inf.profile_image, 
+                        inf.profile_url, inf.subscribers, inf.video_count, inf.view_count, inf.location,
+                        COALESCE(mi.category, inf.category, 'General') AS category
+                 FROM ${myInfTable} mi
+                 INNER JOIN ${infTable} inf ON inf.id = mi.influencer_id
+                 WHERE mi.id = ?
+                 LIMIT 1`,
+                [id]
+            );
+            if (myRows && myRows.length > 0) {
+                return mapRow(myRows[0]);
+            }
+            return null;
+        } catch (err) {
+            console.error("Influencer.findById error:", err.message);
+            return null;
+        }
+    },
+
+    async findProfile({ id, email, username, name } = {}) {
+        if (id) {
+            const found = await this.findById(id);
+            if (found) return found;
+        }
+        try {
+            if (email && email.trim()) {
+                const rows = await query(
+                    `SELECT id, platform, name, username, email, profile_image, profile_url, 
+                            subscribers, video_count, view_count, location, category
+                     FROM ${infTable}
+                     WHERE email = ?
+                     LIMIT 1`,
+                    [email.trim()]
+                );
+                if (rows && rows.length > 0) return mapRow(rows[0]);
+            }
+            if (username && username.trim()) {
+                const cleanUname = username.trim().replace(/^@/, "");
+                const rows = await query(
+                    `SELECT id, platform, name, username, email, profile_image, profile_url, 
+                            subscribers, video_count, view_count, location, category
+                     FROM ${infTable}
+                     WHERE username = ? OR username = ?
+                     LIMIT 1`,
+                    [cleanUname, `@${cleanUname}`]
+                );
+                if (rows && rows.length > 0) return mapRow(rows[0]);
+            }
+            if (name && name.trim()) {
+                const rows = await query(
+                    `SELECT id, platform, name, username, email, profile_image, profile_url, 
+                            subscribers, video_count, view_count, location, category
+                     FROM ${infTable}
+                     WHERE name = ?
+                     LIMIT 1`,
+                    [name.trim()]
+                );
+                if (rows && rows.length > 0) return mapRow(rows[0]);
+            }
+            return null;
+        } catch (err) {
+            console.error("Influencer.findProfile error:", err.message);
+            return null;
+        }
     },
 };

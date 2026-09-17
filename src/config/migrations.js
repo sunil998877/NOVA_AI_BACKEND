@@ -227,6 +227,29 @@ async function ensureCampaign50(pool) {
     }
 }
 
+async function migrateCollaborationChatTables(pool) {
+    try {
+        const [rows] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'collaboration_history'`
+        );
+        const colSet = new Set(rows.map((r) => r.COLUMN_NAME));
+
+        if (!colSet.has("access_token")) {
+            await pool.query(
+                `ALTER TABLE collaboration_history ADD COLUMN access_token VARCHAR(64) NULL UNIQUE AFTER delivery_method`
+            );
+        }
+        if (!colSet.has("whatsapp_number")) {
+            await pool.query(
+                `ALTER TABLE collaboration_history ADD COLUMN whatsapp_number VARCHAR(64) NULL AFTER access_token`
+            );
+        }
+    } catch (e) {
+        console.warn("migrateCollaborationChatTables error:", e.message);
+    }
+}
+
 export async function runMigrations(pool) {
     for (const statement of tableStatements) {
         try {
@@ -242,6 +265,7 @@ export async function runMigrations(pool) {
         migrateInfluencerTables(pool),
         cleanIndependentOrganization(pool),
         ensureCampaign50(pool),
+        migrateCollaborationChatTables(pool),
     ]);
 }
 
