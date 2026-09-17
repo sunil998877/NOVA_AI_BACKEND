@@ -250,6 +250,90 @@ async function migrateCollaborationChatTables(pool) {
     }
 }
 
+async function migrateChatSchema(pool) {
+    try {
+        const [convCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations'`
+        );
+        const convSet = new Set(convCols.map((r) => r.COLUMN_NAME));
+
+        if (!convSet.has("campaign_id")) {
+            await pool.query(`ALTER TABLE conversations ADD COLUMN campaign_id BIGINT NULL AFTER id`);
+        }
+        if (!convSet.has("influencer_id")) {
+            await pool.query(`ALTER TABLE conversations ADD COLUMN influencer_id BIGINT NULL AFTER campaign_id`);
+        }
+        if (!convSet.has("status")) {
+            await pool.query(
+                `ALTER TABLE conversations ADD COLUMN status ENUM('active', 'archived', 'blocked') DEFAULT 'active' AFTER user_id`
+            );
+        }
+        if (!convSet.has("last_message_id")) {
+            await pool.query(`ALTER TABLE conversations ADD COLUMN last_message_id BIGINT NULL AFTER status`);
+        }
+        if (!convSet.has("last_message_at")) {
+            await pool.query(`ALTER TABLE conversations ADD COLUMN last_message_at DATETIME NULL AFTER last_message_id`);
+        }
+
+        // Messages table columns
+        const [msgCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messages'`
+        );
+        const msgSet = new Set(msgCols.map((r) => r.COLUMN_NAME));
+
+        if (!msgSet.has("sender_id")) {
+            await pool.query(`ALTER TABLE messages ADD COLUMN sender_id BIGINT NULL AFTER conversation_id`);
+        }
+        if (!msgSet.has("sender_type")) {
+            await pool.query(
+                `ALTER TABLE messages ADD COLUMN sender_type ENUM('user', 'influencer', 'assistant', 'system') NOT NULL DEFAULT 'user' AFTER sender_id`
+            );
+        }
+        if (!msgSet.has("message")) {
+            await pool.query(`ALTER TABLE messages ADD COLUMN message TEXT NULL AFTER sender_type`);
+            // If content column already exists, copy content to message
+            if (msgSet.has("content")) {
+                await pool.query(`UPDATE messages SET message = content WHERE message IS NULL AND content IS NOT NULL`);
+            }
+        }
+        if (!msgSet.has("message_type")) {
+            await pool.query(
+                `ALTER TABLE messages ADD COLUMN message_type ENUM('text', 'image', 'file', 'system') DEFAULT 'text' AFTER message`
+            );
+        }
+        if (!msgSet.has("is_read")) {
+            await pool.query(`ALTER TABLE messages ADD COLUMN is_read BOOLEAN DEFAULT FALSE AFTER message_type`);
+        }
+
+        // Ensure indexes
+        try {
+            await pool.query(`CREATE INDEX idx_conv_user ON conversations (user_id)`);
+        } catch (_) {}
+        try {
+            await pool.query(`CREATE INDEX idx_conv_influencer ON conversations (influencer_id)`);
+        } catch (_) {}
+        try {
+            await pool.query(`CREATE INDEX idx_conv_last_msg ON conversations (last_message_at)`);
+        } catch (_) {}
+        try {
+            await pool.query(`CREATE INDEX idx_messages_conv ON messages (conversation_id)`);
+        } catch (_) {}
+        try {
+            await pool.query(`CREATE INDEX idx_messages_sender ON messages (sender_id)`);
+        } catch (_) {}
+        try {
+            await pool.query(`CREATE INDEX idx_messages_created ON messages (createdAt)`);
+        } catch (_) {}
+        try {
+            await pool.query(`CREATE INDEX idx_messages_read ON messages (is_read)`);
+        } catch (_) {}
+    } catch (e) {
+        console.warn("migrateChatSchema error:", e.message);
+    }
+}
+
 export async function runMigrations(pool) {
     for (const statement of tableStatements) {
         try {
@@ -266,6 +350,7 @@ export async function runMigrations(pool) {
         cleanIndependentOrganization(pool),
         ensureCampaign50(pool),
         migrateCollaborationChatTables(pool),
+        migrateChatSchema(pool),
     ]);
 }
 

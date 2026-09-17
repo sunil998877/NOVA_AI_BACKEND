@@ -14,6 +14,7 @@ import influencerRoutes from "./routes/influencer.routes.js";
 import contactRoutes from "./routes/contact.routes.js";
 import trackRoutes from "./routes/track.routes.js";
 import collaborationRoutes from "./routes/collaboration.routes.js";
+import { handleN8nChatEvent } from "./controllers/Webhook/n8n-chat.controller.js";
 
 export const app = express();
 
@@ -106,6 +107,7 @@ app.use("/api/contacts", contactRoutes);
 app.use("/api/track", trackRoutes);
 app.use("/api/tracking", trackRoutes);
 app.use("/api/collab", collaborationRoutes);
+app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
 
 
 app.use((err, _req, res, _next) => {

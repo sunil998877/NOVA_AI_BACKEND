@@ -1,16 +1,21 @@
 export const messageSchema = {
     table: "messages",
-    columns: "id, conversation_id, user_id, role, content, createdAt, updatedAt",
+    columns:
+        "id, conversation_id, sender_id, sender_type, message, message_type, is_read, role, content, createdAt",
     createTable: `CREATE TABLE IF NOT EXISTS messages (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        conversation_id INT NOT NULL,
-        user_id INT NOT NULL,
-        role ENUM('user', 'assistant', 'system') NOT NULL,
-        content TEXT NOT NULL,
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        conversation_id BIGINT NOT NULL,
+        sender_id BIGINT NULL,
+        sender_type ENUM('user', 'influencer', 'assistant', 'system') NOT NULL DEFAULT 'user',
+        message TEXT NULL,
+        message_type ENUM('text', 'image', 'file', 'system') DEFAULT 'text',
+        is_read BOOLEAN DEFAULT FALSE,
+        role VARCHAR(32) NULL,
+        content TEXT NULL,
         createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_messages_conversation (conversation_id),
-        CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-        CONSTRAINT fk_messages_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        INDEX idx_messages_sender (sender_id),
+        INDEX idx_messages_created (createdAt),
+        INDEX idx_messages_read (is_read)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 };
