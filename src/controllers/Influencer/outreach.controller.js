@@ -163,7 +163,11 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     }
 
     const recipientEmail = String(email).trim();
-    const cleanSubject = String(subject).trim();
+    let cleanSubject = String(subject).trim();
+    if (/^(?:(?:following\s*up|re|fwd):\s*){2,}/i.test(cleanSubject)) {
+        const rootSubject = cleanSubject.replace(/^(?:(?:following\s*up|re|fwd):\s*)+/gi, "").trim();
+        cleanSubject = `Following up: ${rootSubject}`;
+    }
     const cleanMessage = String(message).trim();
     const creatorName = String(name || influencerName || "Creator").trim();
     const creatorUsername = username || influencerUsername || null;
@@ -185,7 +189,24 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     const fromAddress = `"${senderName}" <${senderEmail}>`;
 
     const accessToken = crypto.randomBytes(20).toString("hex");
-    const rawWhatsapp = req.body?.whatsappNumber ? String(req.body.whatsappNumber).trim() : null;
+    let rawWhatsapp = req.body?.whatsappNumber ? String(req.body.whatsappNumber).trim() : null;
+    if (!rawWhatsapp && req.user?.id) {
+        try {
+            if (influencerId) {
+                const prevCollab = await Collaboration.findLatestByInfluencerAndUser(influencerId, req.user.id);
+                if (prevCollab?.whatsapp_number) {
+                    rawWhatsapp = prevCollab.whatsapp_number;
+                }
+            }
+            if (!rawWhatsapp) {
+                const rows = await Collaboration.listByUser(req.user.id, { limit: 10 });
+                const found = rows.find((r) => r.whatsapp_number && r.whatsapp_number.trim());
+                if (found?.whatsapp_number) {
+                    rawWhatsapp = found.whatsapp_number;
+                }
+            }
+        } catch (_) { }
+    }
     const cleanWhatsapp = rawWhatsapp ? rawWhatsapp.replace(/[^\d+]/g, "") : null;
 
     let clientBaseUrl = env.clientUrl || env.frontendUrl || "";
@@ -202,19 +223,25 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     }
     const portalUrl = `${clientBaseUrl.replace(/\/+$/, "")}/collab/${accessToken}`;
 
-    let whatsappButtonHtml = "";
+    let waUrl = portalUrl;
     if (cleanWhatsapp) {
         const waNumberOnly = cleanWhatsapp.replace(/^\+/, "");
         const waText = encodeURIComponent(
             `Hi! I received your collaboration invite from ${senderName} regarding my channel ${creatorUsername || creatorName}. Let's discuss details!`
         );
-        const waUrl = `https://wa.me/${waNumberOnly}?text=${waText}`;
-        whatsappButtonHtml = `
-          <a href="${waUrl}" target="_blank" style="display: inline-block; background: #25D366; color: #ffffff; text-decoration: none; padding: 11px 20px; border-radius: 8px; font-weight: bold; font-size: 13px; margin-top: 6px; margin-right: 8px; box-shadow: 0 2px 5px rgba(37, 211, 102, 0.25);">
-            💬 Chat on WhatsApp
-          </a>
-        `;
+        waUrl = `https://wa.me/${waNumberOnly}?text=${waText}`;
+    } else {
+        const waText = encodeURIComponent(
+            `Hi! I received your collaboration invite from ${senderName} regarding my channel ${creatorUsername || creatorName}. Let's discuss details!`
+        );
+        waUrl = `https://wa.me/?text=${waText}`;
     }
+
+    const whatsappButtonHtml = `
+      <a href="${waUrl}" target="_blank" style="display: inline-block; background: #25D366; color: #ffffff; text-decoration: none; padding: 11px 20px; border-radius: 8px; font-weight: bold; font-size: 13px; margin-top: 6px; margin-right: 8px; box-shadow: 0 2px 5px rgba(37, 211, 102, 0.25);">
+        💬 Chat on WhatsApp
+      </a>
+    `;
 
     const htmlBody = `
 <!DOCTYPE html>
@@ -245,7 +272,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
       </p>
       <div>
         <a href="${portalUrl}" target="_blank" style="display: inline-block; background: #0d9488; color: #ffffff; text-decoration: none; padding: 11px 20px; border-radius: 8px; font-weight: bold; font-size: 13px; margin-top: 6px; margin-right: 8px; box-shadow: 0 2px 6px rgba(13, 148, 136, 0.3);">
-          🤝 Open Deal Portal & Chat
+          🤝 Open Collaboration Portal
         </a>
         ${whatsappButtonHtml}
       </div>
@@ -254,7 +281,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0 16px 0;" />
     <div style="font-size: 12px; color: #94a3b8;">
       <span>Sent via ${senderName}</span>
-      <span style="float: right;"><a href="${portalUrl}" style="color: #0d9488; text-decoration: none;">Direct Deal Link</a></span>
+      <span style="float: right;"><a href="${portalUrl}" style="color: #0d9488; text-decoration: none;">Collaboration Portal</a></span>
     </div>
   </div>
 </body>

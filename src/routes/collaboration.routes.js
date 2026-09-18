@@ -6,16 +6,16 @@ import {
     getMarketerMessages,
     sendMarketerMessage,
     getMarketerConversations,
+    getChatCount,
 } from "../controllers/Influencer/collaboration-portal.controller.js";
 
 const router = Router();
 
-// Public Creator Portal routes
 router.get("/portal/:token", getPortalByToken);
 router.post("/portal/:token/message", sendPortalMessage);
 
-// Authenticated Marketer routes
 router.get("/conversations", authenticate, getMarketerConversations);
+router.get("/chat-count", authenticate, getChatCount);
 router.get("/:id/messages", authenticate, getMarketerMessages);
 router.post("/:id/messages", authenticate, sendMarketerMessage);
 

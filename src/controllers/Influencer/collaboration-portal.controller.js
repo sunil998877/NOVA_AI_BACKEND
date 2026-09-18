@@ -1,4 +1,5 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { query } from "../../config/db.js";
 import { Collaboration } from "../../models/collaboration.model.js";
 import { CollaborationMessage } from "../../models/collaboration-message.model.js";
 import { Influencer } from "../../models/influencer.model.js";
@@ -189,3 +190,30 @@ export const getMarketerConversations = asyncHandler(async (req, res) => {
         data: conversations,
     });
 });
+
+export const getChatCount = asyncHandler(async (req, res) => {
+    await CollaborationMessage.ensureTable();
+    const rows = await query(
+        `SELECT 
+            COUNT(DISTINCT CASE WHEN cm.sender_type = 'influencer' THEN COALESCE(ch.influencer_id, ch.recipient_email, ch.id) END) AS influencers_count,
+            COUNT(CASE WHEN cm.sender_type = 'influencer' THEN 1 END) AS total_messages,
+            COUNT(CASE WHEN cm.sender_type = 'influencer' AND cm.read_at IS NULL THEN 1 END) AS unread_count
+         FROM collaboration_history ch
+         INNER JOIN collaboration_messages cm ON ch.id = cm.collaboration_id
+         WHERE ch.user_id = ?`,
+        [req.user.id]
+    );
+
+    const unread = Number(rows[0]?.unread_count || 0);
+    const total = Number(rows[0]?.total_messages || 0);
+    const influencers = Number(rows[0]?.influencers_count || 0);
+
+    return res.status(200).json({
+        success: true,
+        unreadCount: unread,
+        totalMessages: total,
+        influencersCount: influencers,
+        count: unread > 0 ? unread : total,
+    });
+});
+
