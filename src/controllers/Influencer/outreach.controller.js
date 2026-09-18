@@ -195,7 +195,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     if (!clientBaseUrl && req.headers.referer) {
         try {
             clientBaseUrl = new URL(req.headers.referer).origin;
-        } catch (_) {}
+        } catch (_) { }
     }
     if (!clientBaseUrl) {
         clientBaseUrl = "http://localhost:5173";

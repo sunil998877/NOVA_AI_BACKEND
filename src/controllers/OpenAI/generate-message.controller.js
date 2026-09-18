@@ -5,16 +5,15 @@ import { getOpenAiClient } from "./client.js";
 
 export const generateMessage = asyncHandler(async (req, res) => {
     const { prompt, conversationId } = req.body;
-    if (!conversationId) {
-        return res.status(400).json({ error: "Missing conversationId parameter." });
-    }
     if (!prompt) {
         return res.status(400).json({ error: "prompt is required" });
     }
 
-    const conversation = await Conversation.findOwned(conversationId, req.user.id);
-    if (!conversation) {
-        return res.status(404).json({ error: "Conversation not found" });
+    let conversation = null;
+    if (conversationId) {
+        try {
+            conversation = await Conversation.findOwned(conversationId, req.user.id);
+        } catch (_) {}
     }
 
     const client = getOpenAiClient();
@@ -34,7 +33,7 @@ export const generateMessage = asyncHandler(async (req, res) => {
     };
 
     let aiMessages = [systemMessage];
-    if (req.body.context) {
+    if (req.body.context && conversation) {
         const history = await Message.findByConversation(conversation.id);
         const tail = history
             .slice(-30)
@@ -53,23 +52,27 @@ export const generateMessage = asyncHandler(async (req, res) => {
 
     const data = completion.choices[0]?.message?.content || "No response received.";
 
-    await Message.create({
-        conversation_id: conversation.id,
-        user_id: req.user.id,
-        role: "user",
-        content: prompt,
-    });
+    if (conversation) {
+        try {
+            await Message.create({
+                conversation_id: conversation.id,
+                user_id: req.user.id,
+                role: "user",
+                content: prompt,
+            });
 
-    await Message.create({
-        conversation_id: conversation.id,
-        user_id: req.user.id,
-        role: "assistant",
-        content: data,
-    });
+            await Message.create({
+                conversation_id: conversation.id,
+                user_id: req.user.id,
+                role: "assistant",
+                content: data,
+            });
+        } catch (_) {}
+    }
 
     return res.status(200).json({
         data,
-        threadId: conversation.thread_id,
+        threadId: conversation?.thread_id || null,
         error: null,
     });
 });

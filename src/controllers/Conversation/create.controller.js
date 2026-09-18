@@ -10,5 +10,5 @@ export const createConversation = asyncHandler(async (req, res) => {
         thread_id: thread_id || null,
         expiresAt: new Date(Date.now() + FIFTEEN_DAYS_MS),
     });
-    return res.status(201).json(conversation);
+    return res.status(201).json({ success: true, data: conversation, ...conversation });
 });

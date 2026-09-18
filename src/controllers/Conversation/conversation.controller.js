@@ -108,26 +108,34 @@ export const getConversationDetails = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/conversations
- * Create or find an existing conversation for an influencer and campaign.
+ * Create or find an existing conversation for an influencer, campaign, or copilot chat.
+ * Campaigns and influencers are separate - campaigns do NOT require an influencerId.
  */
 export const createOrFindConversation = asyncHandler(async (req, res) => {
     const { campaignId, influencerId, title } = req.body;
 
-    if (!influencerId) {
-        return res.status(400).json({ error: "influencerId is required" });
+    const resolvedInfluencerId = influencerId ? Number(influencerId) : null;
+    const resolvedCampaignId = campaignId ? Number(campaignId) : null;
+
+    let convTitle = title;
+    if (resolvedInfluencerId) {
+        // Influencer-specific conversation
+        let inf = null;
+        try {
+            inf = await Influencer.findById(resolvedInfluencerId);
+        } catch (_) {}
+        convTitle = title || (inf ? `Chat with ${inf.name}` : "Influencer Chat");
+    } else if (resolvedCampaignId) {
+        // Campaign-specific conversation (separate from influencer)
+        convTitle = title || "Campaign Discussion";
+    } else {
+        // General marketing / AI copilot conversation
+        convTitle = title || "AI Copilot";
     }
 
-    // Verify influencer exists
-    let inf = null;
-    try {
-        inf = await Influencer.findById(influencerId);
-    } catch (_) {}
-
-    const convTitle = title || (inf ? `Chat with ${inf.name}` : "Influencer Chat");
-
     const conv = await Conversation.findOrCreate({
-        campaignId: campaignId ? Number(campaignId) : null,
-        influencerId: Number(influencerId),
+        campaignId: resolvedCampaignId,
+        influencerId: resolvedInfluencerId,
         userId: req.user.id,
         title: convTitle,
     });
@@ -135,6 +143,7 @@ export const createOrFindConversation = asyncHandler(async (req, res) => {
     return res.status(200).json({
         success: true,
         data: conv,
+        ...conv,
     });
 });
 

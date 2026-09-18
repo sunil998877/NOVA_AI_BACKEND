@@ -10,9 +10,9 @@ export const CampaignRecipient = {
             `SELECT cr.id, cr.campaign_id, cr.contact_id, cr.status, cr.sent_at, cr.created_at,
                     c.name, c.email, c.company
              FROM ${table} cr
-             INNER JOIN contacts c ON c.id = cr.contact_id
+             LEFT JOIN contacts c ON c.id = cr.contact_id
              WHERE cr.campaign_id = ?
-             ORDER BY c.name ASC`,
+             ORDER BY COALESCE(c.name, '') ASC`,
             [campaignId]
         );
         return rows.map(mapRow);

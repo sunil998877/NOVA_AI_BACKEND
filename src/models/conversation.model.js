@@ -40,34 +40,62 @@ export const Conversation = {
         return null;
     },
 
-    async findByCampaignAndInfluencer(campaignId, influencerId, userId) {
+    async findByCampaignAndInfluencer(campaignId, influencerId, userId, title = null) {
         let sql = `SELECT ${columns} FROM ${table} WHERE user_id = ?`;
         const params = [userId];
 
-        if (campaignId) {
-            sql += ` AND campaign_id = ?`;
-            params.push(campaignId);
-        }
         if (influencerId) {
             sql += ` AND influencer_id = ?`;
             params.push(influencerId);
+            if (campaignId) {
+                sql += ` AND campaign_id = ?`;
+                params.push(campaignId);
+            }
+        } else if (campaignId) {
+            sql += ` AND campaign_id = ? AND influencer_id IS NULL`;
+            params.push(campaignId);
+        } else if (title) {
+            sql += ` AND title = ? AND influencer_id IS NULL AND campaign_id IS NULL`;
+            params.push(title);
+        } else {
+            sql += ` AND influencer_id IS NULL AND campaign_id IS NULL`;
         }
 
-        sql += ` LIMIT 1`;
+        sql += ` ORDER BY COALESCE(last_message_at, createdAt) DESC LIMIT 1`;
         const rows = await query(sql, params);
         return rows[0] ? mapRow(rows[0]) : null;
     },
 
-    async findOrCreate({ campaignId = null, influencerId, userId, title = "Influencer Chat" }) {
-        let existing = await this.findByCampaignAndInfluencer(campaignId, influencerId, userId);
+    async findOrCreate({ campaignId = null, influencerId = null, userId, title = "Chat" }) {
+        let existing = await this.findByCampaignAndInfluencer(campaignId, influencerId, userId, title);
         if (existing) return existing;
 
         const result = await execute(
             `INSERT INTO ${table} (campaign_id, influencer_id, user_id, status, title, last_message_at)
              VALUES (?, ?, ?, 'active', ?, NOW())`,
-            [campaignId || null, influencerId, userId, title]
+            [campaignId || null, influencerId || null, userId, title]
         );
         return this.findById(result.insertId);
+    },
+
+    async create({ userId, user_id, campaignId = null, campaign_id = null, influencerId = null, influencer_id = null, title = "New conversation", thread_id = null, expiresAt = null }) {
+        const uId = userId || user_id;
+        const cId = campaignId || campaign_id || null;
+        const iId = influencerId || influencer_id || null;
+        const result = await execute(
+            `INSERT INTO ${table} (campaign_id, influencer_id, user_id, status, title, thread_id, expiresAt, last_message_at)
+             VALUES (?, ?, ?, 'active', ?, ?, ?, NOW())`,
+            [cId, iId, uId, title, thread_id, expiresAt]
+        );
+        return this.findById(result.insertId);
+    },
+
+    async findByUser(userId) {
+        const rows = await query(
+            `SELECT ${columns} FROM ${table} WHERE user_id = ? ORDER BY COALESCE(last_message_at, createdAt) DESC`,
+            [userId]
+        );
+        return mapRows(rows);
     },
 
     async listInfluencerConversations(userId) {
@@ -168,5 +196,20 @@ export const Conversation = {
 
     async deleteById(id) {
         await execute(`DELETE FROM ${table} WHERE id = ?`, [id]);
+    },
+
+    async findExpiredIds(userId) {
+        const rows = await query(
+            `SELECT id FROM ${table} WHERE user_id = ? AND expiresAt IS NOT NULL AND expiresAt < NOW()`,
+            [userId]
+        );
+        return rows.map((r) => r.id);
+    },
+
+    async deleteByIds(ids = []) {
+        if (!ids || ids.length === 0) return 0;
+        const inClause = placeholders(ids);
+        const result = await execute(`DELETE FROM ${table} WHERE id IN (${inClause})`, ids);
+        return result.affectedRows || 0;
     },
 };
