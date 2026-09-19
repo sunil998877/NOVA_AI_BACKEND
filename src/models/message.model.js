@@ -38,7 +38,6 @@ export const Message = {
         sql += ` ORDER BY id DESC LIMIT ${safeLimit}`;
 
         const rows = await query(sql, params);
-        // Reverse so frontend gets chronological order (oldest to newest)
         return rows.reverse().map((r) => this.formatMessage(mapRow(r)));
     },
 
@@ -53,7 +52,6 @@ export const Message = {
     },
 
     async markAsRead(conversationId, readerType) {
-        // If reader is user, mark influencer messages as read; if reader is influencer, mark user messages as read
         const targetSenderType = readerType === "user" ? "influencer" : "user";
         await execute(
             `UPDATE ${table} SET is_read = 1

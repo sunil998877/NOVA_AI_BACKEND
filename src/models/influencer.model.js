@@ -150,7 +150,6 @@ export const Influencer = {
 
         let influencerId = null;
 
-        // 1. Insert or update global influencers table
         try {
             const insertResult = await execute(
                 `INSERT INTO ${infTable}
@@ -189,12 +188,10 @@ export const Influencer = {
         } catch (insertErr) {
             console.warn("Primary influencer insert failed, attempting schema-compatible fallback:", insertErr.message);
 
-            // Attempt to make user_id nullable if it was NOT NULL
             try {
                 await query(`ALTER TABLE ${infTable} MODIFY COLUMN user_id INT NULL`);
             } catch (_) {}
 
-            // Retry with user_id included if user_id column is required
             try {
                 const retryResult = await execute(
                     `INSERT INTO ${infTable}
@@ -207,7 +204,6 @@ export const Influencer = {
                 );
                 if (retryResult?.insertId) influencerId = retryResult.insertId;
             } catch {
-                // Retry standard insert after alter
                 try {
                     const retryResult = await execute(
                         `INSERT INTO ${infTable}
@@ -220,7 +216,6 @@ export const Influencer = {
                     );
                     if (retryResult?.insertId) influencerId = retryResult.insertId;
                 } catch {
-                    // Minimal legacy insert fallback
                     const minResult = await execute(
                         `INSERT INTO ${infTable} (user_id, name, platform, status)
                          VALUES (?, ?, ?, ?)`,
@@ -231,7 +226,6 @@ export const Influencer = {
             }
         }
 
-        // 2. Query influencer id if insertId was not returned
         if (!influencerId) {
             try {
                 const infRows = await query(
@@ -256,7 +250,6 @@ export const Influencer = {
             throw new Error(`Failed to resolve influencer ID for ${platform}:${platformUserId}`);
         }
 
-        // 3. Upsert into my_influencers table
         try {
             await execute(
                 `INSERT INTO ${myInfTable} (user_id, influencer_id, status, category, notes)
@@ -295,7 +288,6 @@ export const Influencer = {
                     [userId, influencerId, status, notes]
                 );
             } catch {
-                // If my_influencers join table cannot be used, ensure status is set on infTable directly
                 try {
                     await execute(
                         `UPDATE ${infTable} SET status = ?, user_id = COALESCE(user_id, ?) WHERE id = ?`,
@@ -305,7 +297,6 @@ export const Influencer = {
             }
         }
 
-        // 4. Return saved record
         const owned = await this.findOwned(influencerId, userId);
         if (owned) return owned;
 
@@ -412,7 +403,7 @@ export const Influencer = {
         if (!id) return null;
         try {
             const rows = await query(
-                `SELECT inf.id, inf.platform, inf.name, inf.username, inf.email, inf.profile_image, 
+                `SELECT inf.id, inf.platform, inf.name, inf.username, inf.email, inf.profile_image,
                         inf.profile_url, inf.subscribers, inf.video_count, inf.view_count, inf.location, inf.category
                  FROM ${infTable} inf
                  WHERE inf.id = ?
@@ -423,7 +414,7 @@ export const Influencer = {
                 return mapRow(rows[0]);
             }
             const myRows = await query(
-                `SELECT inf.id, inf.platform, inf.name, inf.username, inf.email, inf.profile_image, 
+                `SELECT inf.id, inf.platform, inf.name, inf.username, inf.email, inf.profile_image,
                         inf.profile_url, inf.subscribers, inf.video_count, inf.view_count, inf.location,
                         COALESCE(mi.category, inf.category, 'General') AS category
                  FROM ${myInfTable} mi
@@ -450,7 +441,7 @@ export const Influencer = {
         try {
             if (email && email.trim()) {
                 const rows = await query(
-                    `SELECT id, platform, name, username, email, profile_image, profile_url, 
+                    `SELECT id, platform, name, username, email, profile_image, profile_url,
                             subscribers, video_count, view_count, location, category
                      FROM ${infTable}
                      WHERE email = ?
@@ -462,7 +453,7 @@ export const Influencer = {
             if (username && username.trim()) {
                 const cleanUname = username.trim().replace(/^@/, "");
                 const rows = await query(
-                    `SELECT id, platform, name, username, email, profile_image, profile_url, 
+                    `SELECT id, platform, name, username, email, profile_image, profile_url,
                             subscribers, video_count, view_count, location, category
                      FROM ${infTable}
                      WHERE username = ? OR username = ?
@@ -473,7 +464,7 @@ export const Influencer = {
             }
             if (name && name.trim()) {
                 const rows = await query(
-                    `SELECT id, platform, name, username, email, profile_image, profile_url, 
+                    `SELECT id, platform, name, username, email, profile_image, profile_url,
                             subscribers, video_count, view_count, location, category
                      FROM ${infTable}
                      WHERE name = ?

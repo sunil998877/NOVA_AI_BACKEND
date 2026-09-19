@@ -3,10 +3,6 @@ import { env } from "../config/env.js";
 import { User } from "../models/user.model.js";
 import { Collaboration } from "../models/collaboration.model.js";
 
-/**
- * Socket.IO authentication middleware.
- * Authenticates NOVA users via JWT or Influencers via collaboration access token.
- */
 export async function socketAuth(socket, next) {
     try {
         const auth = socket.handshake.auth || {};
@@ -27,7 +23,6 @@ export async function socketAuth(socket, next) {
             return next(new Error("Unauthorized: No authentication token provided"));
         }
 
-        // 1. Check if token is a valid JWT (NOVA User)
         if (env.jwtSecret) {
             try {
                 const payload = jwt.verify(token, env.jwtSecret);
@@ -46,11 +41,9 @@ export async function socketAuth(socket, next) {
                     }
                 }
             } catch (_) {
-                // Not a valid JWT, fall through to check if it's an Influencer portal access token
             }
         }
 
-        // 2. Check if token is an Influencer Collaboration access token (UUID / string)
         try {
             const collab = await Collaboration.findByToken(token);
             if (collab) {

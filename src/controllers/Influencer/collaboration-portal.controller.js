@@ -4,7 +4,6 @@ import { Collaboration } from "../../models/collaboration.model.js";
 import { CollaborationMessage } from "../../models/collaboration-message.model.js";
 import { Influencer } from "../../models/influencer.model.js";
 
-// Public endpoint for creators to view deal details & chat
 export const getPortalByToken = asyncHandler(async (req, res) => {
     const { token } = req.params;
     if (!token || !token.trim()) {
@@ -16,10 +15,8 @@ export const getPortalByToken = asyncHandler(async (req, res) => {
         return res.status(404).json({ error: "Collaboration proposal not found or link has expired" });
     }
 
-    // Fire-and-forget read status update non-blocking in background
     CollaborationMessage.markAsRead(collab.id, "influencer").catch(() => {});
 
-    // Fetch extra influencer profile and messages history concurrently
     const [extraInfluencer, messages] = await Promise.all([
         (collab.influencer_id || collab.recipient_email)
             ? Influencer.findProfile({
@@ -55,7 +52,6 @@ export const getPortalByToken = asyncHandler(async (req, res) => {
     });
 });
 
-// Public endpoint for creators to post a message into the deal chat
 export const sendPortalMessage = asyncHandler(async (req, res) => {
     const { token } = req.params;
     const { content } = req.body;
@@ -80,7 +76,6 @@ export const sendPortalMessage = asyncHandler(async (req, res) => {
         content: String(content).trim(),
     });
 
-    // Automatically transition deal to 'negotiating' if currently 'sent' or 'contacted'
     if (collab.status === "sent" || collab.status === "contacted") {
         try {
             await Collaboration.updateStatusByToken(token.trim(), "negotiating");
@@ -99,7 +94,6 @@ export const sendPortalMessage = asyncHandler(async (req, res) => {
     });
 });
 
-// Authenticated endpoint for Marketer to get chat messages
 export const getMarketerMessages = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { influencerId } = req.query;
@@ -119,7 +113,6 @@ export const getMarketerMessages = asyncHandler(async (req, res) => {
         });
     }
 
-    // Mark influencer's messages as read by marketer
     await CollaborationMessage.markAsRead(collab.id, "marketer");
 
     const messages = await CollaborationMessage.findByCollaborationId(collab.id);
@@ -131,7 +124,6 @@ export const getMarketerMessages = asyncHandler(async (req, res) => {
     });
 });
 
-// Authenticated endpoint for Marketer to send a reply in Nova
 export const sendMarketerMessage = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { content } = req.body;
@@ -159,7 +151,6 @@ export const sendMarketerMessage = asyncHandler(async (req, res) => {
     });
 });
 
-// Authenticated endpoint for Marketer to list all influencer conversations
 export const getMarketerConversations = asyncHandler(async (req, res) => {
     const collabs = await Collaboration.listByUser(req.user.id, { limit: 100 });
 
@@ -195,7 +186,7 @@ export const getMarketerConversations = asyncHandler(async (req, res) => {
 export const getChatCount = asyncHandler(async (req, res) => {
     await CollaborationMessage.ensureTable();
     const rows = await query(
-        `SELECT 
+        `SELECT
             COUNT(DISTINCT CASE WHEN cm.sender_type = 'influencer' THEN COALESCE(ch.influencer_id, ch.recipient_email, ch.id) END) AS influencers_count,
             COUNT(CASE WHEN cm.sender_type = 'influencer' THEN 1 END) AS total_messages,
             COUNT(CASE WHEN cm.sender_type = 'influencer' AND cm.read_at IS NULL THEN 1 END) AS unread_count

@@ -4,14 +4,10 @@ import { Collaboration } from "../models/collaboration.model.js";
 import { CollaborationMessage } from "../models/collaboration-message.model.js";
 import { presence } from "./presence.js";
 
-/**
- * Register Socket.IO chat event handlers for a connected socket
- */
 export function registerChatHandlers(io, socket) {
     const user = socket.user;
     if (!user) return;
 
-    // Track presence across user ID, collabId, and influencerId aliases
     const isFirstConnection = presence.add(user.id, socket.id);
     if (user.collabId) {
         presence.add(String(user.collabId), socket.id);
@@ -32,14 +28,10 @@ export function registerChatHandlers(io, socket) {
         }
     }
 
-    // Send current online users to this socket
     socket.emit("presence:state", {
         onlineUserIds: presence.getOnlineUserIds(),
     });
 
-    /**
-     * 1. Join Conversation Room
-     */
     socket.on("joinConversation", async ({ conversationId }, callback) => {
         try {
             if (!conversationId) {
@@ -49,13 +41,11 @@ export function registerChatHandlers(io, socket) {
                 return;
             }
 
-            // Verify access
             let authorized = false;
             let conv = await Conversation.findForParticipant(conversationId, user);
             if (conv) {
                 authorized = true;
             } else {
-                // Check if conversationId refers to collaboration_history
                 if (user.role === "user") {
                     const collab = await Collaboration.findById(conversationId, user.id);
                     if (collab) authorized = true;
@@ -85,9 +75,6 @@ export function registerChatHandlers(io, socket) {
         }
     });
 
-    /**
-     * 2. Send Message
-     */
     socket.on("sendMessage", async (payload, callback) => {
         try {
             const { conversationId, message, messageType = "text", tempId = null } = payload || {};
@@ -155,8 +142,8 @@ export function registerChatHandlers(io, socket) {
                 id: savedMessage?.id || Date.now(),
                 conversationId: Number(conversationId),
                 senderId: user.role === "user" ? Number(user.id) : null,
-                senderType: resolvedSenderType, // 'influencer' | 'user'
-                sender_type: resolvedSenderTypeDb, // 'influencer' | 'marketer'
+                senderType: resolvedSenderType,
+                sender_type: resolvedSenderTypeDb,
                 senderName: resolvedSenderName,
                 sender_name: resolvedSenderName,
                 message: text,
@@ -164,13 +151,11 @@ export function registerChatHandlers(io, socket) {
                 messageType,
                 isRead: false,
                 createdAt: savedMessage?.createdAt || new Date().toISOString(),
-                tempId, // Echo temporary ID so sender replaces optimistic UI message
+                tempId,
             };
 
-            // Broadcast to all participants in the conversation room
             io.to(room).emit("newMessage", formattedMsg);
 
-            // Notify all user tabs of conversation list update
             io.emit("conversation:updated", {
                 conversationId: Number(conversationId),
                 lastMessage: text,
@@ -187,9 +172,6 @@ export function registerChatHandlers(io, socket) {
         }
     });
 
-    /**
-     * 3. Typing Indicators
-     */
     socket.on("typing:start", ({ conversationId }) => {
         if (!conversationId) return;
         socket.to(`conversation:${conversationId}`).emit("typing:start", {
@@ -208,9 +190,6 @@ export function registerChatHandlers(io, socket) {
         });
     });
 
-    /**
-     * 4. Read Receipts
-     */
     socket.on("message:read", async ({ conversationId }) => {
         if (!conversationId) return;
         try {
@@ -233,9 +212,6 @@ export function registerChatHandlers(io, socket) {
         }
     });
 
-    /**
-     * 5. Disconnect Handler
-     */
     socket.on("disconnect", () => {
         const isOffline = presence.remove(socket.id);
         if (isOffline) {

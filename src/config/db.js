@@ -25,7 +25,6 @@ export const connectDb = async () => {
     const { host, port, user, password, database } = env.mysql;
 
     try {
-        // Only run CREATE DATABASE bootstrap for local MySQL
         if (host === "127.0.0.1" || host === "localhost") {
             try {
                 const bootstrap = await mysql.createConnection({ host, port, user, password });
@@ -75,7 +74,6 @@ export const connectDb = async () => {
                 "• Copy the public domain (e.g. *.proxy.rlwy.net) and public port, or copy MYSQL_PUBLIC_URL.\n"
             );
         }
-        // Do not crash the entire server; allow HTTP and health checks to stay alive while retrying
         setTimeout(() => {
             console.log("Retrying database connection in 5s...");
             connectDb().catch(() => {});

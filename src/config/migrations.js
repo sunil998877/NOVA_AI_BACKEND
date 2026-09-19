@@ -283,7 +283,6 @@ async function migrateChatSchema(pool) {
             await pool.query(`ALTER TABLE conversations ADD COLUMN last_message_at DATETIME NULL AFTER last_message_id`);
         }
 
-        // Messages table columns
         const [msgCols] = await pool.query(
             `SELECT COLUMN_NAME FROM information_schema.COLUMNS
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messages'`
@@ -300,7 +299,6 @@ async function migrateChatSchema(pool) {
         }
         if (!msgSet.has("message")) {
             await pool.query(`ALTER TABLE messages ADD COLUMN message TEXT NULL AFTER sender_type`);
-            // If content column already exists, copy content to message
             if (msgSet.has("content")) {
                 await pool.query(`UPDATE messages SET message = content WHERE message IS NULL AND content IS NOT NULL`);
             }
@@ -314,7 +312,6 @@ async function migrateChatSchema(pool) {
             await pool.query(`ALTER TABLE messages ADD COLUMN is_read BOOLEAN DEFAULT FALSE AFTER message_type`);
         }
 
-        // Ensure indexes
         try {
             await pool.query(`CREATE INDEX idx_conv_user ON conversations (user_id)`);
         } catch (_) {}
@@ -350,7 +347,6 @@ export async function runMigrations(pool) {
         }
     }
 
-    // Must migrate campaign columns first so ensureCampaign50 and models can query sender_name/sender_email
     await migrateCampaignCopyColumns(pool);
 
     await Promise.allSettled([

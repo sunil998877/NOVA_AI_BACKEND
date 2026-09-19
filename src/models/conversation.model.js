@@ -25,13 +25,11 @@ export const Conversation = {
         if (!conv) return null;
 
         if (user.role === "user") {
-            // Marketer access
             if (String(conv.user_id) === String(user.id)) return conv;
             return null;
         }
 
         if (user.role === "influencer") {
-            // Influencer access (check influencer_id, or if collab id matches)
             if (conv.influencer_id && String(conv.influencer_id) === String(user.id)) return conv;
             if (user.collabId && String(conv.id) === String(user.collabId)) return conv;
             return null;
@@ -99,12 +97,11 @@ export const Conversation = {
     },
 
     async listInfluencerConversations(userId) {
-        // Query conversations for user along with influencer/collaboration details
         const sql = `
-            SELECT 
+            SELECT
                 c.id, c.campaign_id, c.influencer_id, c.user_id, c.status,
                 c.last_message_id, c.last_message_at, c.title, c.createdAt, c.updatedAt,
-                i.name AS influencer_name, i.username AS influencer_username, 
+                i.name AS influencer_name, i.username AS influencer_username,
                 i.platform AS platform, i.profile_image AS profile_image,
                 i.email AS recipient_email
             FROM ${table} c
@@ -117,7 +114,6 @@ export const Conversation = {
         try {
             rows = await query(sql, [userId]);
         } catch (_) {
-            // Fallback to simpler query if join fails
             rows = await query(
                 `SELECT ${columns} FROM ${table} WHERE user_id = ? ORDER BY COALESCE(last_message_at, createdAt) DESC`,
                 [userId]
@@ -128,8 +124,7 @@ export const Conversation = {
             rows.map(async (row) => {
                 const conv = mapRow(row);
                 const unreadCount = await Message.countUnread(conv.id, "user");
-                
-                // Fetch last message snippet
+
                 let lastMessageText = "";
                 let lastSenderType = "system";
                 let lastMessageAt = conv.last_message_at || conv.createdAt;

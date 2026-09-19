@@ -4,12 +4,7 @@ import { Message } from "../../models/message.model.js";
 import { Collaboration } from "../../models/collaboration.model.js";
 import { Influencer } from "../../models/influencer.model.js";
 
-/**
- * GET /api/conversations
- * List all active conversations for the authenticated marketer, sorted by last_message_at DESC.
- */
 export const listUserConversations = asyncHandler(async (req, res) => {
-    // 1. Get influencer conversations from conversations table
     let conversations = [];
     try {
         conversations = await Conversation.listInfluencerConversations(req.user.id);
@@ -17,7 +12,6 @@ export const listUserConversations = asyncHandler(async (req, res) => {
         console.warn("[ConversationController] listInfluencerConversations warning:", err.message);
     }
 
-    // 2. Also merge with collaborations table to guarantee zero missing conversations
     try {
         const collabs = await Collaboration.listByUser(req.user.id, { limit: 100 });
         const existingIds = new Set(conversations.map((c) => String(c.id)));
@@ -31,7 +25,6 @@ export const listUserConversations = asyncHandler(async (req, res) => {
                 !existingIds.has(String(collab.id)) &&
                 (!collabInfId || !existingInfluencerIds.has(collabInfId))
             ) {
-                // Bridge collaboration into list
                 conversations.push({
                     id: Number(collab.id),
                     campaignId: null,
@@ -54,7 +47,6 @@ export const listUserConversations = asyncHandler(async (req, res) => {
         }
     } catch (_) {}
 
-    // Sort by last message timestamp descending
     conversations.sort(
         (a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime()
     );
@@ -65,10 +57,6 @@ export const listUserConversations = asyncHandler(async (req, res) => {
     });
 });
 
-/**
- * GET /api/conversations/:conversationId
- * Get conversation details and metadata.
- */
 export const getConversationDetails = asyncHandler(async (req, res) => {
     const { conversationId } = req.params;
     let conv = await Conversation.findForParticipant(conversationId, {
@@ -76,7 +64,6 @@ export const getConversationDetails = asyncHandler(async (req, res) => {
         role: "user",
     });
 
-    // If not found in conversations, check collaboration_history
     if (!conv) {
         const collab = await Collaboration.findById(conversationId, req.user.id);
         if (collab) {
@@ -106,11 +93,6 @@ export const getConversationDetails = asyncHandler(async (req, res) => {
     });
 });
 
-/**
- * POST /api/conversations
- * Create or find an existing conversation for an influencer, campaign, or copilot chat.
- * Campaigns and influencers are separate - campaigns do NOT require an influencerId.
- */
 export const createOrFindConversation = asyncHandler(async (req, res) => {
     const { campaignId, influencerId, title } = req.body;
 
@@ -119,17 +101,14 @@ export const createOrFindConversation = asyncHandler(async (req, res) => {
 
     let convTitle = title;
     if (resolvedInfluencerId) {
-        // Influencer-specific conversation
         let inf = null;
         try {
             inf = await Influencer.findById(resolvedInfluencerId);
         } catch (_) {}
         convTitle = title || (inf ? `Chat with ${inf.name}` : "Influencer Chat");
     } else if (resolvedCampaignId) {
-        // Campaign-specific conversation (separate from influencer)
         convTitle = title || "Campaign Discussion";
     } else {
-        // General marketing / AI copilot conversation
         convTitle = title || "AI Copilot";
     }
 
@@ -147,10 +126,6 @@ export const createOrFindConversation = asyncHandler(async (req, res) => {
     });
 });
 
-/**
- * GET /api/conversations/:conversationId/messages
- * Fetch paginated message history (?before=123&limit=50).
- */
 export const getConversationMessages = asyncHandler(async (req, res) => {
     const { conversationId } = req.params;
     const { before, limit = 50 } = req.query;
@@ -167,10 +142,6 @@ export const getConversationMessages = asyncHandler(async (req, res) => {
     });
 });
 
-/**
- * POST /api/conversations/:conversationId/read
- * Mark incoming messages as read.
- */
 export const markConversationRead = asyncHandler(async (req, res) => {
     const { conversationId } = req.params;
     await Message.markAsRead(conversationId, "user");

@@ -4,20 +4,12 @@ let cachedTunnelUrl = null;
 let lastTunnelCheck = 0;
 const TUNNEL_CACHE_TTL_MS = 5000;
 
-/**
- * Resolves the public base URL for email tracking and callbacks.
- * Priority:
- * 1. Live local ngrok tunnel via http://127.0.0.1:4040/api/tunnels
- * 2. process.env.PUBLIC_API_URL (if configured and valid)
- * 3. process.env.VITE_BACKEND_URL or req host
- */
 export async function getPublicApiUrl(req = null) {
     const now = Date.now();
     if (cachedTunnelUrl && (now - lastTunnelCheck) < TUNNEL_CACHE_TTL_MS) {
         return cachedTunnelUrl;
     }
 
-    // 1. Try discovering an active local ngrok tunnel
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 800);
@@ -41,16 +33,13 @@ export async function getPublicApiUrl(req = null) {
             }
         }
     } catch {
-        // ngrok web interface not responding or not running locally
     }
 
-    // 2. Fall back to process.env.PUBLIC_API_URL if configured
     const configuredPublicUrl = process.env.PUBLIC_API_URL?.trim();
     if (configuredPublicUrl && !configuredPublicUrl.includes("placeholder")) {
         return configuredPublicUrl.replace(/\/$/, "");
     }
 
-    // 3. Fall back to VITE_BACKEND_URL or request origin
     const configuredBackendUrl = process.env.VITE_BACKEND_URL?.trim();
     if (configuredBackendUrl && !configuredBackendUrl.includes("localhost") && !configuredBackendUrl.includes("127.0.0.1")) {
         return configuredBackendUrl.replace(/\/$/, "");

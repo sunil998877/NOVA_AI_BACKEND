@@ -5,13 +5,7 @@ import { CollaborationMessage } from "../../models/collaboration-message.model.j
 import { getIo } from "../../socket/socketServer.js";
 import { env } from "../../config/env.js";
 
-/**
- * POST /api/webhooks/n8n/chat-event
- * Receives external events/replies from n8n workflows, persists to MySQL,
- * and notifies NOVA dashboards via Socket.IO.
- */
 export const handleN8nChatEvent = asyncHandler(async (req, res) => {
-    // 1. Secret / Auth validation
     const secret =
         req.headers["x-n8n-secret"] ||
         req.headers["x-webhook-secret"] ||
@@ -41,7 +35,6 @@ export const handleN8nChatEvent = asyncHandler(async (req, res) => {
 
     const cleanText = String(message).trim();
 
-    // 2. Persist to messages table
     let savedMsg = null;
     try {
         savedMsg = await Message.create({
@@ -53,7 +46,6 @@ export const handleN8nChatEvent = asyncHandler(async (req, res) => {
         });
     } catch (_) {}
 
-    // 3. Also persist into collaboration_messages for backward compatibility
     try {
         await CollaborationMessage.create({
             collaborationId,
@@ -63,7 +55,6 @@ export const handleN8nChatEvent = asyncHandler(async (req, res) => {
         });
     } catch (_) {}
 
-    // 4. Update conversation timestamp
     try {
         await Conversation.updateLastMessage(conversationId, savedMsg?.id, new Date());
     } catch (_) {}
@@ -81,7 +72,6 @@ export const handleN8nChatEvent = asyncHandler(async (req, res) => {
         createdAt: savedMsg?.createdAt || new Date().toISOString(),
     };
 
-    // 5. Broadcast to Socket.IO room
     const io = getIo();
     if (io) {
         io.to(`conversation:${conversationId}`).emit("newMessage", formattedMsg);

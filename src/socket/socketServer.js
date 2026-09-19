@@ -5,10 +5,6 @@ import { registerChatHandlers } from "./chatHandlers.js";
 
 let ioInstance = null;
 
-/**
- * Initialize Socket.IO attached to existing Express HTTP Server.
- * Supports CORS, WebSocket/polling transports, and heartbeat timeouts.
- */
 export function initSocketServer(httpServer) {
     if (ioInstance) return ioInstance;
 
@@ -49,13 +45,11 @@ export function initSocketServer(httpServer) {
         transports: ["websocket", "polling"],
         pingTimeout: 20000,
         pingInterval: 25000,
-        maxHttpBufferSize: 1e6, // 1MB max payload for safety
+        maxHttpBufferSize: 1e6,
     });
 
-    // Authentication middleware
     io.use(socketAuth);
 
-    // Connection lifecycle
     io.on("connection", (socket) => {
         registerChatHandlers(io, socket);
     });
@@ -65,9 +59,6 @@ export function initSocketServer(httpServer) {
     return io;
 }
 
-/**
- * Access the active Socket.IO server instance anywhere in backend.
- */
 export function getIo() {
     return ioInstance;
 }

@@ -42,7 +42,6 @@ export const CollaborationMessage = {
 
     async markAsRead(collaborationId, readerType) {
         await this.ensureTable();
-        // If marketer reads, mark messages from influencer as read, and vice-versa
         const targetSenderType = readerType === "marketer" ? "influencer" : "marketer";
         await execute(
             `UPDATE ${table} SET read_at = CURRENT_TIMESTAMP

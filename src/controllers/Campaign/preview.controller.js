@@ -8,7 +8,6 @@ export const previewCampaign = asyncHandler(async (req, res) => {
     const campaignId = req.params.id || req.params.campaignId;
     let campaign = await Campaign.findOwned(campaignId, req.user.id);
     if (!campaign) {
-        // Fallback: check if campaign exists by ID in case ownership matching is type-sensitive
         campaign = await Campaign.findById(campaignId);
     }
 
