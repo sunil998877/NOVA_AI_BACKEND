@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS `users` (
 CREATE TABLE IF NOT EXISTS `campaigns` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `title` VARCHAR(255) NOT NULL,
+    `sender_name` VARCHAR(255) NULL,
+    `sender_email` VARCHAR(255) NULL,
     `workMail` VARCHAR(255) NULL,
     `followups` VARCHAR(32) NOT NULL DEFAULT '0',
     `camp_status` VARCHAR(64) NOT NULL DEFAULT 'Pending',

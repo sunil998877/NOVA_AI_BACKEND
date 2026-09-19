@@ -4,10 +4,17 @@ async function migrateCampaignCopyColumns(pool) {
     try {
         const [rows] = await pool.query(
             `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns'
-               AND COLUMN_NAME IN ('subject', 'body', 'total_recipients', 'sent_count', 'failed_count')`
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns'`
         );
         const existing = new Set(rows.map((row) => row.COLUMN_NAME));
+        if (!existing.has("sender_name")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN sender_name VARCHAR(255) NULL AFTER title`);
+            console.log("[Migration] Added column 'sender_name' to campaigns table");
+        }
+        if (!existing.has("sender_email")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN sender_email VARCHAR(255) NULL AFTER sender_name`);
+            console.log("[Migration] Added column 'sender_email' to campaigns table");
+        }
         if (!existing.has("subject")) {
             await pool.query(`ALTER TABLE campaigns ADD COLUMN subject VARCHAR(255) NULL AFTER status`);
         }
@@ -342,8 +349,11 @@ export async function runMigrations(pool) {
             console.error("Schema statement error:", error.message);
         }
     }
+
+    // Must migrate campaign columns first so ensureCampaign50 and models can query sender_name/sender_email
+    await migrateCampaignCopyColumns(pool);
+
     await Promise.allSettled([
-        migrateCampaignCopyColumns(pool),
         migrateMailDeliveryStatus(pool),
         migrateTrackingColumns(pool),
         migrateInfluencerTables(pool),

@@ -29,16 +29,54 @@ const googleClientIds = [
     ]),
 ];
 
+const parseMysqlConfig = () => {
+    const rawUrl =
+        process.env.MYSQL_PUBLIC_URL ||
+        process.env.MYSQL_URL ||
+        process.env.DATABASE_URL ||
+        (process.env.MYSQL_HOST?.startsWith("mysql://") ? process.env.MYSQL_HOST : null);
+
+    if (rawUrl) {
+        try {
+            const parsed = new URL(rawUrl);
+            return {
+                host: parsed.hostname,
+                port: Number(parsed.port || 3306),
+                user: decodeURIComponent(parsed.username || "root"),
+                password: decodeURIComponent(parsed.password || ""),
+                database: parsed.pathname.replace(/^\//, "") || "railway",
+            };
+        } catch (e) {
+            console.warn("[env] Failed to parse MySQL connection URL:", e.message);
+        }
+    }
+
+    let rawHost = process.env.MYSQL_HOST || process.env.MYSQLHOST || "127.0.0.1";
+    rawHost = rawHost.replace(/^mysql:\/\//i, "").replace(/^https?:\/\//i, "").trim();
+    if (rawHost.includes(":")) {
+        const [h, p] = rawHost.split(":");
+        return {
+            host: h,
+            port: Number(process.env.MYSQL_PORT || process.env.MYSQLPORT || p || 3306),
+            user: process.env.MYSQL_USER || process.env.MYSQLUSER || "root",
+            password: process.env.MYSQL_PASSWORD || process.env.MYSQLPASSWORD || "",
+            database: process.env.MYSQL_DATABASE || process.env.MYSQLDATABASE || "nova_ai",
+        };
+    }
+
+    return {
+        host: rawHost,
+        port: Number(process.env.MYSQL_PORT || process.env.MYSQLPORT || 3306),
+        user: process.env.MYSQL_USER || process.env.MYSQLUSER || "root",
+        password: process.env.MYSQL_PASSWORD || process.env.MYSQLPASSWORD || "",
+        database: process.env.MYSQL_DATABASE || process.env.MYSQLDATABASE || "nova_ai",
+    };
+};
+
 export const env = {
     port: Number(process.env.PORT || 3000),
     nodeEnv: process.env.NODE_ENV || "development",
-    mysql: {
-        host: process.env.MYSQL_HOST || "127.0.0.1",
-        port: Number(process.env.MYSQL_PORT || 3306),
-        user: process.env.MYSQL_USER || "root",
-        password: process.env.MYSQL_PASSWORD || "",
-        database: process.env.MYSQL_DATABASE || "nova_ai",
-    },
+    mysql: parseMysqlConfig(),
     jwtSecret: process.env.JWT_SECRET || "",
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
     allowedOrigins: parseOrigins(process.env.ALLOWED_ORIGINS),

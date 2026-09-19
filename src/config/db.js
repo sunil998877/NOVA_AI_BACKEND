@@ -25,17 +25,20 @@ export const connectDb = async () => {
     const { host, port, user, password, database } = env.mysql;
 
     try {
-        try {
-            const bootstrap = await mysql.createConnection({ host, port, user, password });
-            await bootstrap.query(
-                `CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-            );
-            await bootstrap.end();
-        } catch (error) {
-            console.error("Could not create database:", error.message);
+        // Only run CREATE DATABASE bootstrap for local MySQL
+        if (host === "127.0.0.1" || host === "localhost") {
+            try {
+                const bootstrap = await mysql.createConnection({ host, port, user, password });
+                await bootstrap.query(
+                    `CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+                );
+                await bootstrap.end();
+            } catch (error) {
+                console.warn("Could not create local database:", error.message);
+            }
         }
 
-        pool = mysql.createPool({
+        const poolConfig = {
             host,
             port,
             user,
@@ -43,10 +46,17 @@ export const connectDb = async () => {
             database,
             waitForConnections: true,
             connectionLimit: 10,
-        });
+            connectTimeout: 20000,
+        };
+
+        if (process.env.MYSQL_SSL === "true") {
+            poolConfig.ssl = { rejectUnauthorized: false };
+        }
+
+        pool = mysql.createPool(poolConfig);
 
         await pool.query("SELECT 1");
-        console.log(`Connected to MySQL successfully (${database})`);
+        console.log(`Connected to MySQL successfully (${database} @ ${host}:${port})`);
 
         await runMigrations(pool);
 
@@ -55,7 +65,14 @@ export const connectDb = async () => {
         console.error("Error connecting to MySQL:", error.message);
         if (error.code === "ER_ACCESS_DENIED_ERROR") {
             console.error(
-                "Set MYSQL_USER and MYSQL_PASSWORD in Backend/.env to your local MySQL credentials."
+                "Access denied: Verify MYSQL_USER and MYSQL_PASSWORD in Backend/.env."
+            );
+        } else if (error.code === "ENOTFOUND" || error.code === "EAI_FAIL") {
+            console.error(
+                `\n[MySQL Connection Guide]: Could not resolve host '${host}'.\n` +
+                "• 'mysql.railway.internal' only resolves INSIDE Railway containers (not on local machines).\n" +
+                "• For local development, go to Railway Dashboard -> MySQL -> Settings -> Public Networking (TCP Proxy).\n" +
+                "• Copy the public domain (e.g. *.proxy.rlwy.net) and public port, or copy MYSQL_PUBLIC_URL.\n"
             );
         }
         process.exit(1);
