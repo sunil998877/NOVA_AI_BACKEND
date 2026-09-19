@@ -28,7 +28,10 @@ app.use(
                 env.allowedOrigins.includes(normalized) ||
                 env.allowedOrigins.includes(origin) ||
                 normalized.includes("localhost") ||
-                normalized.includes("127.0.0.1")
+                normalized.includes("127.0.0.1") ||
+                normalized.endsWith(".onrender.com") ||
+                normalized.includes("onrender.com") ||
+                normalized.endsWith(".hostingersite.com")
             ) {
                 return callback(null, true);
             }
