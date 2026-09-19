@@ -75,7 +75,11 @@ export const connectDb = async () => {
                 "• Copy the public domain (e.g. *.proxy.rlwy.net) and public port, or copy MYSQL_PUBLIC_URL.\n"
             );
         }
-        process.exit(1);
+        // Do not crash the entire server; allow HTTP and health checks to stay alive while retrying
+        setTimeout(() => {
+            console.log("Retrying database connection in 5s...");
+            connectDb().catch(() => {});
+        }, 5000);
     }
 };
 
