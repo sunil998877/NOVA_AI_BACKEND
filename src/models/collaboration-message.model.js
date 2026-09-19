@@ -4,11 +4,15 @@ import { mapRow, mapRows } from "./mapRow.js";
 
 const { table, columns, createTable } = collaborationMessageSchema;
 
+let tableEnsured = false;
+
 export const CollaborationMessage = {
     async ensureTable() {
+        if (tableEnsured) return;
         try {
             await query(createTable);
-        } catch (_) {}
+            tableEnsured = true;
+        } catch (_) { }
     },
 
     async findById(id) {

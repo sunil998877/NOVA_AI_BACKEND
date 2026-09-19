@@ -11,10 +11,25 @@ export function registerChatHandlers(io, socket) {
     const user = socket.user;
     if (!user) return;
 
-    // Track presence
+    // Track presence across user ID, collabId, and influencerId aliases
     const isFirstConnection = presence.add(user.id, socket.id);
+    if (user.collabId) {
+        presence.add(String(user.collabId), socket.id);
+        presence.add(`inf-${user.collabId}`, socket.id);
+    }
+    if (user.influencerId) {
+        presence.add(String(user.influencerId), socket.id);
+    }
+
     if (isFirstConnection) {
         io.emit("user:online", { userId: user.id, role: user.role });
+        if (user.collabId) {
+            io.emit("user:online", { userId: String(user.collabId), role: user.role });
+            io.emit("user:online", { userId: `inf-${user.collabId}`, role: user.role });
+        }
+        if (user.influencerId) {
+            io.emit("user:online", { userId: String(user.influencerId), role: user.role });
+        }
     }
 
     // Send current online users to this socket
@@ -98,39 +113,52 @@ export function registerChatHandlers(io, socket) {
 
             const room = `conversation:${conversationId}`;
 
-            let savedMessage = null;
-            try {
-                savedMessage = await Message.create({
+            const explicitSenderType = payload?.senderType || payload?.sender_type;
+            const resolvedSenderType =
+                explicitSenderType === "influencer" || explicitSenderType === "creator"
+                    ? "influencer"
+                    : (user.role === "influencer" || user.senderType === "influencer" ? "influencer" : "user");
+
+            const resolvedSenderTypeDb = resolvedSenderType === "influencer" ? "influencer" : "marketer";
+            const resolvedSenderName =
+                payload?.senderName ||
+                payload?.sender_name ||
+                user.name ||
+                (resolvedSenderTypeDb === "influencer" ? "Creator" : "Marketer");
+
+            const targetCollabId = user.collabId || conversationId;
+
+            const [savedMessage] = await Promise.all([
+                Message.create({
                     conversationId,
                     senderId: user.role === "user" ? user.userId || user.id : null,
-                    senderType: user.senderType,
+                    senderType: resolvedSenderType,
                     message: text,
                     messageType,
-                });
-            } catch (e) {
-                console.warn("[Socket] Message.create fallback:", e.message);
-            }
-
-            try {
-                const targetCollabId = user.collabId || conversationId;
-                await CollaborationMessage.create({
+                }).catch((e) => {
+                    console.warn("[Socket] Message.create fallback:", e.message);
+                    return null;
+                }),
+                CollaborationMessage.create({
                     collaborationId: targetCollabId,
-                    senderType: user.senderType === "user" ? "marketer" : "influencer",
-                    senderName: user.name || (user.senderType === "user" ? "Marketer" : "Creator"),
+                    senderType: resolvedSenderTypeDb,
+                    senderName: resolvedSenderName,
                     content: text,
-                });
-            } catch (_) {}
+                }).catch(() => null),
+            ]);
 
-            try {
-                await Conversation.updateLastMessage(conversationId, savedMessage?.id, new Date());
-            } catch (_) {}
+            if (savedMessage?.id) {
+                Conversation.updateLastMessage(conversationId, savedMessage.id, new Date()).catch(() => {});
+            }
 
             const formattedMsg = {
                 id: savedMessage?.id || Date.now(),
                 conversationId: Number(conversationId),
                 senderId: user.role === "user" ? Number(user.id) : null,
-                senderType: user.senderType, // 'user' | 'influencer'
-                senderName: user.name || (user.senderType === "user" ? "Marketer" : "Creator"),
+                senderType: resolvedSenderType, // 'influencer' | 'user'
+                sender_type: resolvedSenderTypeDb, // 'influencer' | 'marketer'
+                senderName: resolvedSenderName,
+                sender_name: resolvedSenderName,
                 message: text,
                 content: text,
                 messageType,

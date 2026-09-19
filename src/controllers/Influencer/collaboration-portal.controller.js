@@ -16,20 +16,21 @@ export const getPortalByToken = asyncHandler(async (req, res) => {
         return res.status(404).json({ error: "Collaboration proposal not found or link has expired" });
     }
 
-    let extraInfluencer = null;
-    try {
-        extraInfluencer = await Influencer.findProfile({
-            id: collab.influencer_id,
-            email: collab.recipient_email,
-            username: collab.influencer_username,
-            name: collab.influencer_name,
-        });
-    } catch (_) {}
+    // Fire-and-forget read status update non-blocking in background
+    CollaborationMessage.markAsRead(collab.id, "influencer").catch(() => {});
 
-    // Mark marketer's messages as read by influencer
-    await CollaborationMessage.markAsRead(collab.id, "influencer");
-
-    const messages = await CollaborationMessage.findByCollaborationId(collab.id);
+    // Fetch extra influencer profile and messages history concurrently
+    const [extraInfluencer, messages] = await Promise.all([
+        (collab.influencer_id || collab.recipient_email)
+            ? Influencer.findProfile({
+                id: collab.influencer_id,
+                email: collab.recipient_email,
+                username: collab.influencer_username,
+                name: collab.influencer_name,
+            }).catch(() => null)
+            : Promise.resolve(null),
+        CollaborationMessage.findByCollaborationId(collab.id).catch(() => []),
+    ]);
 
     return res.status(200).json({
         collaboration: {
@@ -89,7 +90,7 @@ export const sendPortalMessage = asyncHandler(async (req, res) => {
                     lastContact: new Date(),
                 });
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     return res.status(201).json({
@@ -169,7 +170,7 @@ export const getMarketerConversations = asyncHandler(async (req, res) => {
             try {
                 unreadCount = await CollaborationMessage.countUnread(collab.id, "marketer");
                 messages = await CollaborationMessage.findByCollaborationId(collab.id);
-            } catch (_) {}
+            } catch (_) { }
 
             const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
             return {
