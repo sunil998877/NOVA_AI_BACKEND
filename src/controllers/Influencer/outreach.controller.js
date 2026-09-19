@@ -209,17 +209,29 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     }
     const cleanWhatsapp = rawWhatsapp ? rawWhatsapp.replace(/[^\d+]/g, "") : null;
 
-    let clientBaseUrl = env.clientUrl || env.frontendUrl || "";
-    if (!clientBaseUrl && req.headers.origin) {
-        clientBaseUrl = req.headers.origin;
-    }
-    if (!clientBaseUrl && req.headers.referer) {
-        try {
-            clientBaseUrl = new URL(req.headers.referer).origin;
-        } catch (_) { }
-    }
+    const candidateOrigins = [
+        req.body?.portalBaseUrl,
+        req.body?.clientUrl,
+        req.body?.frontendUrl,
+        req.headers["x-frontend-url"],
+        req.headers.origin,
+        req.headers.referer ? (() => {
+            try { return new URL(req.headers.referer).origin; } catch (_) { return ""; }
+        })() : "",
+        process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "",
+        process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
+        process.env.FRONTEND_URL,
+        env.frontendUrl,
+        env.clientUrl,
+        ...(Array.isArray(env.allowedOrigins) ? env.allowedOrigins : []),
+    ].filter(Boolean).map((u) => String(u).trim().replace(/\/+$/, ""));
+
+    const liveVercelOrigin = candidateOrigins.find((u) => u.includes("vercel.app"));
+    const liveCustomOrigin = candidateOrigins.find((u) => u.startsWith("https://") && !u.includes("localhost") && !u.includes("127.0.0.1") && !u.includes("ngrok") && !u.includes("onrender.com"));
+
+    let clientBaseUrl = liveVercelOrigin || liveCustomOrigin;
     if (!clientBaseUrl) {
-        clientBaseUrl = "http://localhost:5173";
+        clientBaseUrl = candidateOrigins.find((u) => !u.includes("localhost") && !u.includes("127.0.0.1")) || candidateOrigins[0] || "http://localhost:5173";
     }
     const portalUrl = `${clientBaseUrl.replace(/\/+$/, "")}/collab/${accessToken}`;
 
