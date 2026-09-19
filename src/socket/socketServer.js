@@ -32,6 +32,8 @@ export function initSocketServer(httpServer) {
                         normalized.includes("127.0.0.1") ||
                         normalized.endsWith(".onrender.com") ||
                         normalized.includes("onrender.com") ||
+                        normalized.endsWith(".vercel.app") ||
+                        normalized.includes("vercel.app") ||
                         normalized.endsWith(".hostingersite.com")
                 );
                 if (matched || env.nodeEnv !== "production") {
