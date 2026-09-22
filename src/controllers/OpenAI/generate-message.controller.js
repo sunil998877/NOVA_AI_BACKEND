@@ -13,7 +13,7 @@ export const generateMessage = asyncHandler(async (req, res) => {
     if (conversationId) {
         try {
             conversation = await Conversation.findOwned(conversationId, req.user.id);
-        } catch (_) {}
+        } catch (_) { }
     }
 
     const client = getOpenAiClient();
@@ -41,9 +41,8 @@ export const generateMessage = asyncHandler(async (req, res) => {
         aiMessages = aiMessages.concat(
             tail.map((item) => ({ role: item.role, content: item.content }))
         );
-    } else {
-        aiMessages.push({ role: "user", content: prompt });
     }
+    aiMessages.push({ role: "user", content: prompt });
 
     const completion = await client.chat.completions.create({
         model: "gpt-4o-mini",
@@ -67,7 +66,7 @@ export const generateMessage = asyncHandler(async (req, res) => {
                 role: "assistant",
                 content: data,
             });
-        } catch (_) {}
+        } catch (_) { }
     }
 
     return res.status(200).json({

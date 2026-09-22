@@ -15,7 +15,7 @@ export const getPortalByToken = asyncHandler(async (req, res) => {
         return res.status(404).json({ error: "Collaboration proposal not found or link has expired" });
     }
 
-    CollaborationMessage.markAsRead(collab.id, "influencer").catch(() => {});
+    CollaborationMessage.markAsRead(collab.id, "influencer").catch(() => { });
 
     const [extraInfluencer, messages] = await Promise.all([
         (collab.influencer_id || collab.recipient_email)
