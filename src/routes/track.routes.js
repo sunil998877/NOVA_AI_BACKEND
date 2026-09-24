@@ -5,7 +5,7 @@ const router = Router();
 
 router.get("/open/:campaignId/:recipientId", trackOpen);
 router.get("/click/:campaignId/:recipientId", trackClick);
-router.get("/open/:mailId", trackOpen);
-router.get("/click/:mailId", trackClick);
+router.get("/open/:token", trackOpen);
+router.get("/click/:token", trackClick);
 
 export default router;

@@ -11,6 +11,7 @@ import { fetchWithTimeout } from "../../utils/fetch.js";
 import { signCampaignSendToken } from "../../utils/campaign-send-token.js";
 import { getPublicApiUrl } from "../../utils/urlHelper.js";
 import { sendMail } from "../../utils/mailer.js";
+import { prepareEmailTracking, recordMailDelivered } from "../../utils/emailTracking.js";
 
 async function sendViaSmtp({ to, subject, html, text, from, replyTo }) {
     const port = env.smtp?.port || 587;
@@ -367,17 +368,13 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
     } catch (_) { }
 
     let finalHtml = htmlBody;
-    if (
-        apiBaseUrl &&
-        createdMail?.id &&
-        createdCamp?.id &&
-        /^https:\/\//i.test(apiBaseUrl) &&
-        !/localhost|127\.0\.0\.1/i.test(apiBaseUrl)
-    ) {
-        const pixel = `<img src="${apiBaseUrl.replace(/\/$/, "")}/api/tracking/open/${createdCamp.id}/${createdMail.id}?t=${Date.now()}" width="1" height="1" alt="" border="0" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;display:block;" />`;
-        finalHtml = /<\/body>/i.test(htmlBody)
-            ? htmlBody.replace(/<\/body>/i, `${pixel}</body>`)
-            : `${htmlBody}${pixel}`;
+    if (createdMail?.id) {
+        const tracked = await prepareEmailTracking(htmlBody, {
+            mailId: createdMail.id,
+            campaignId: createdCamp?.id || null,
+            apiBaseUrl,
+        });
+        finalHtml = tracked.html;
     }
 
     const recipient = {
@@ -465,6 +462,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
                     delivery_status: "sent",
                     sent_at: new Date(),
                 });
+                await recordMailDelivered(createdMail.id, createdCamp.id);
             }
         } catch (_) { }
     }

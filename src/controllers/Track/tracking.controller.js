@@ -1,7 +1,9 @@
-import { Mail } from "../../models/mail.model.js";
-import { EmailEvent } from "../../models/email-event.model.js";
+import {
+  handleTrackedOpen,
+  handleTrackedClick,
+  isTrackingToken,
+} from "../../utils/emailTracking.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
-import { toMysqlDateTime } from "../../utils/datetime.js";
 
 const TRANSPARENT_GIF = Buffer.from(
   "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
@@ -16,145 +18,89 @@ function getClientIp(req) {
   return req.socket?.remoteAddress || req.ip || null;
 }
 
-function sanitizeRedirectUrl(target) {
-  if (!target || typeof target !== "string") {
-    return "/";
-  }
-  try {
-    const parsed = new URL(target);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return parsed.toString();
-    }
-  } catch { }
-  return "/";
-}
-
-export const trackOpen = asyncHandler(async (req, res) => {
-  const campaignId = req.params.campaignId;
-  const recipientId = req.params.recipientId || req.params.mailId;
-
-  if (recipientId) {
-    try {
-      const mail = await Mail.findById(recipientId);
-      if (mail) {
-        const candidateCampId = campaignId && !Number.isNaN(Number(campaignId)) ? Number(campaignId) : Number(mail.campaign_id);
-        const actualCampaignId = Number.isInteger(candidateCampId) && candidateCampId > 0 ? candidateCampId : null;
-
-        const isFirstOpen = !mail.first_opened_at && (!mail.open_count || Number(mail.open_count) === 0);
-        const now = new Date();
-        const mysqlNow = toMysqlDateTime(now);
-        const nextOpenCount = (Number(mail.open_count) || 0) + 1;
-        const deliveryStatus = mail.delivery_status === "failed" ? "failed" : "opened";
-
-        const updateFields = {
-          open_count: nextOpenCount,
-          last_opened_at: mysqlNow,
-          delivery_status: deliveryStatus,
-          status: 1,
-        };
-        if (isFirstOpen) {
-          updateFields.first_opened_at = mysqlNow;
-        }
-        if (!mail.sent_at) {
-          updateFields.sent_at = mysqlNow;
-        }
-
-        await Mail.updateById(mail.id, updateFields);
-        console.log(`[TrackOpen] Mail ID ${mail.id} (${mail.email}) recorded open #${nextOpenCount} for campaign ${actualCampaignId}`);
-
-        if (actualCampaignId) {
-          try {
-            await EmailEvent.create({
-              campaignId: actualCampaignId,
-              recipientId: mail.id,
-              eventType: "open",
-              url: null,
-              userAgent: req.get("user-agent") || null,
-              ipAddress: getClientIp(req),
-            });
-          } catch (eventErr) {
-            console.warn("[TrackOpen] EmailEvent record skipped:", eventErr.message);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[TrackOpen] Error:", err.message);
-    }
-  }
-
+function sendPixel(res) {
   res.set({
     "Content-Type": "image/gif",
     "Content-Length": TRANSPARENT_GIF.length,
     "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
-    "Pragma": "no-cache",
-    "Expires": "0",
+    Pragma: "no-cache",
+    Expires: "0",
     "Access-Control-Allow-Origin": "*",
-    "ngrok-skip-browser-warning": "1",
   });
   return res.end(TRANSPARENT_GIF);
+}
+
+export const trackOpen = asyncHandler(async (req, res) => {
+  try {
+    const userAgent = req.get("user-agent") || null;
+    const ipAddress = getClientIp(req);
+    const qToken = typeof req.query.t === "string" ? req.query.t : null;
+
+    if (req.params.recipientId) {
+      await handleTrackedOpen({
+        mailId: req.params.recipientId,
+        campaignId: req.params.campaignId,
+        token: qToken,
+        userAgent,
+        ipAddress,
+      });
+    } else {
+      const single = req.params.token;
+      if (isTrackingToken(single)) {
+        await handleTrackedOpen({ token: single, userAgent, ipAddress });
+      } else if (single) {
+        await handleTrackedOpen({
+          mailId: single,
+          token: qToken,
+          userAgent,
+          ipAddress,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[TrackOpen] Error:", err.message);
+  }
+
+  return sendPixel(res);
 });
 
 export const trackClick = asyncHandler(async (req, res) => {
-  const campaignId = req.params.campaignId;
-  const recipientId = req.params.recipientId || req.params.mailId;
-  const targetUrl = req.query.url;
+  let redirectTo = "/";
+  try {
+    const userAgent = req.get("user-agent") || null;
+    const ipAddress = getClientIp(req);
+    const qToken = typeof req.query.t === "string" ? req.query.t : null;
+    let result;
 
-  if (recipientId) {
-    try {
-      const mail = await Mail.findById(recipientId);
-      if (mail) {
-        const candidateCampId = campaignId && !Number.isNaN(Number(campaignId)) ? Number(campaignId) : Number(mail.campaign_id);
-        const actualCampaignId = Number.isInteger(candidateCampId) && candidateCampId > 0 ? candidateCampId : null;
-
-        const now = new Date();
-        const mysqlNow = toMysqlDateTime(now);
-        const nextClickCount = (Number(mail.click_count) || 0) + 1;
-        const nextOpenCount = Math.max(1, Number(mail.open_count) || 1);
-        const deliveryStatus = mail.delivery_status === "failed" ? "failed" : "opened";
-
-        const updateFields = {
-          click_count: nextClickCount,
-          open_count: nextOpenCount,
-          delivery_status: deliveryStatus,
-          status: 1,
-        };
-        if (!mail.first_opened_at) {
-          updateFields.first_opened_at = mysqlNow;
-        }
-        if (!mail.last_opened_at) {
-          updateFields.last_opened_at = mysqlNow;
-        }
-        if (!mail.sent_at) {
-          updateFields.sent_at = mysqlNow;
-        }
-
-        await Mail.updateById(mail.id, updateFields);
-        console.log(`[TrackClick] Mail ID ${mail.id} (${mail.email}) recorded click #${nextClickCount} on ${targetUrl}`);
-
-        if (actualCampaignId) {
-          try {
-            await EmailEvent.create({
-              campaignId: actualCampaignId,
-              recipientId: mail.id,
-              eventType: "click",
-              url: targetUrl || null,
-              userAgent: req.get("user-agent") || null,
-              ipAddress: getClientIp(req),
-            });
-          } catch (eventErr) {
-            console.warn("[TrackClick] EmailEvent record skipped:", eventErr.message);
-          }
-        }
+    if (req.params.recipientId) {
+      result = await handleTrackedClick({
+        mailId: req.params.recipientId,
+        campaignId: req.params.campaignId,
+        fallbackUrl: req.query.url,
+        token: qToken,
+        userAgent,
+        ipAddress,
+      });
+    } else {
+      const single = req.params.token;
+      if (isTrackingToken(single)) {
+        result = await handleTrackedClick({ token: single, userAgent, ipAddress });
+      } else if (single) {
+        result = await handleTrackedClick({
+          mailId: single,
+          fallbackUrl: req.query.url,
+          token: qToken,
+          userAgent,
+          ipAddress,
+        });
       }
-    } catch (err) {
-      console.error("[TrackClick] Error:", err.message);
     }
+
+    if (result?.redirectTo) redirectTo = result.redirectTo;
+  } catch (err) {
+    console.error("[TrackClick] Error:", err.message);
   }
 
-  const destination = sanitizeRedirectUrl(targetUrl);
-  res.set({
-    "Access-Control-Allow-Origin": "*",
-    "ngrok-skip-browser-warning": "1",
-  });
-  return res.redirect(302, destination);
+  res.set({ "Access-Control-Allow-Origin": "*" });
+  return res.redirect(302, redirectTo);
 });

@@ -5,6 +5,7 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
 import { getPublicApiUrl } from "../../utils/urlHelper.js";
 import { env } from "../../config/env.js";
+import { prepareEmailTracking } from "../../utils/emailTracking.js";
 
 export const listMailsByCampaign = asyncHandler(async (req, res) => {
     const campaignId = req.params.id;
@@ -120,40 +121,48 @@ export const listMailsByCampaign = asyncHandler(async (req, res) => {
     ).trim();
 
     const data = await Mail.findByCampaignId(campaign.id);
-    const enrichedData = data.map((item) => {
-        const rendered = renderCampaignEmail({
-            subject: campaign.subject || `Campaign: ${campaign.title}`,
-            body: campaign.body || "",
-            recipient: {
-                ...item,
-                recipientName: item.full_name,
-                recipientEmail: item.email,
-            },
-            campaign: {
-                ...campaign,
-                sender_name: senderName,
-                senderName: senderName,
-                sender_email: senderEmail,
-                senderEmail: senderEmail,
-            },
-            mailId: item.id,
-            apiBaseUrl,
-            enableTracking: true,
-        });
+    const enrichedData = await Promise.all(
+        data.map(async (item) => {
+            const rendered = renderCampaignEmail({
+                subject: campaign.subject || `Campaign: ${campaign.title}`,
+                body: campaign.body || "",
+                recipient: {
+                    ...item,
+                    recipientName: item.full_name,
+                    recipientEmail: item.email,
+                },
+                campaign: {
+                    ...campaign,
+                    sender_name: senderName,
+                    senderName: senderName,
+                    sender_email: senderEmail,
+                    senderEmail: senderEmail,
+                },
+                mailId: item.id,
+                apiBaseUrl,
+                enableTracking: false,
+            });
 
-        return {
-            ...item,
-            recipientName: item.full_name || "",
-            recipientEmail: item.email || "",
-            subject: rendered.subject,
-            body: rendered.text,
-            html: rendered.html,
-            senderEmail,
-            senderName,
-            workMail: campaign.workMail || "",
-            campaign_title: campaign.title || "",
-        };
-    });
+            const tracked = await prepareEmailTracking(rendered.html, {
+                mailId: item.id,
+                campaignId: campaign.id,
+                apiBaseUrl,
+            });
+
+            return {
+                ...item,
+                recipientName: item.full_name || "",
+                recipientEmail: item.email || "",
+                subject: rendered.subject,
+                body: rendered.text,
+                html: tracked.html,
+                senderEmail,
+                senderName,
+                workMail: campaign.workMail || "",
+                campaign_title: campaign.title || "",
+            };
+        })
+    );
 
     return res.status(200).json({
         data: enrichedData,

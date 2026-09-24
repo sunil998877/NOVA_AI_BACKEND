@@ -9,6 +9,7 @@ import { renderCampaignEmail } from "../../utils/emailRenderer.js";
 import { getPublicApiUrl } from "../../utils/urlHelper.js";
 import { sendMail } from "../../utils/mailer.js";
 import { toMysqlDateTime } from "../../utils/datetime.js";
+import { prepareEmailTracking, recordMailDelivered } from "../../utils/emailTracking.js";
 
 async function callN8nWebhook(payload) {
     const webhookUrl = env.n8nWebhookUrl;
@@ -183,46 +184,54 @@ export const sendCampaign = asyncHandler(async (req, res) => {
 
     const fromAddress = `"${senderName}" <${senderEmail}>`;
 
-    const renderedRecipients = recipients.map((mail) => {
-        const rendered = renderCampaignEmail({
-            subject: rawSubject,
-            body: rawBody,
-            recipient: {
+    const renderedRecipients = await Promise.all(
+        recipients.map(async (mail) => {
+            const rendered = renderCampaignEmail({
+                subject: rawSubject,
+                body: rawBody,
+                recipient: {
+                    id: mail.id,
+                    email: mail.email,
+                    recipientEmail: mail.email,
+                    full_name: mail.full_name,
+                    recipientName: mail.full_name,
+                },
+                campaign: {
+                    id: campaign.id,
+                    title: campaign.title,
+                    sender_name: senderName,
+                    senderName: senderName,
+                    sender_email: senderEmail,
+                    senderEmail: senderEmail,
+                    workMail: campaign.workMail,
+                },
+                mailId: mail.id,
+                apiBaseUrl,
+                enableTracking: false,
+            });
+
+            const tracked = await prepareEmailTracking(rendered.html, {
+                mailId: mail.id,
+                campaignId: campaign.id,
+                apiBaseUrl,
+            });
+
+            return {
                 id: mail.id,
                 email: mail.email,
                 recipientEmail: mail.email,
-                full_name: mail.full_name,
-                recipientName: mail.full_name,
-            },
-            campaign: {
-                id: campaign.id,
-                title: campaign.title,
-                sender_name: senderName,
-                senderName: senderName,
-                sender_email: senderEmail,
-                senderEmail: senderEmail,
-                workMail: campaign.workMail,
-            },
-            mailId: mail.id,
-            apiBaseUrl,
-            enableTracking: true,
-        });
-
-        return {
-            id: mail.id,
-            email: mail.email,
-            recipientEmail: mail.email,
-            full_name: mail.full_name || "",
-            recipientName: mail.full_name || "",
-            campaign_id: campaign.id,
-            subject: rendered.subject,
-            body: rendered.text,
-            html: rendered.html,
-            senderEmail,
-            senderName,
-            from: fromAddress,
-        };
-    });
+                full_name: mail.full_name || "",
+                recipientName: mail.full_name || "",
+                campaign_id: campaign.id,
+                subject: rendered.subject,
+                body: rendered.text,
+                html: tracked.html,
+                senderEmail,
+                senderName,
+                from: fromAddress,
+            };
+        })
+    );
 
     const firstItem = renderedRecipients[0] || {};
     const primarySubject = firstItem.subject || rawSubject;
@@ -289,6 +298,7 @@ export const sendCampaign = asyncHandler(async (req, res) => {
                     delivery_status: "sent",
                     sent_at: toMysqlDateTime(new Date()),
                 });
+                await recordMailDelivered(item.id, campaign.id);
                 sent += 1;
             } catch (err) {
                 failed += 1;

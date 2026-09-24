@@ -5,13 +5,45 @@ import { mapRow, mapRows } from "./mapRow.js";
 const { table, columns } = emailEventSchema;
 
 export const EmailEvent = {
-    async create({ campaignId, recipientId, eventType, url = null, userAgent = null, ipAddress = null }) {
-        const result = await execute(
-            `INSERT INTO ${table} (campaignId, recipientId, eventType, url, userAgent, ipAddress)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [Number(campaignId), Number(recipientId), eventType, url, userAgent, ipAddress]
-        );
-        return this.findById(result.insertId);
+    async create({
+        campaignId,
+        recipientId,
+        eventType,
+        url = null,
+        trackingToken = null,
+        userAgent = null,
+        ipAddress = null,
+    }) {
+        try {
+            const result = await execute(
+                `INSERT INTO ${table} (campaignId, recipientId, eventType, url, tracking_token, userAgent, ipAddress)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    Number(campaignId),
+                    Number(recipientId),
+                    eventType,
+                    url,
+                    trackingToken,
+                    userAgent,
+                    ipAddress,
+                ]
+            );
+            return this.findById(result.insertId);
+        } catch (err) {
+            const result = await execute(
+                `INSERT INTO ${table} (campaignId, recipientId, eventType, url, userAgent, ipAddress)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [
+                    Number(campaignId),
+                    Number(recipientId),
+                    eventType,
+                    url,
+                    userAgent,
+                    ipAddress,
+                ]
+            );
+            return this.findById(result.insertId);
+        }
     },
 
     async findById(id) {
@@ -49,7 +81,9 @@ export const EmailEvent = {
                 COUNT(CASE WHEN eventType = 'open' THEN 1 END) AS totalOpens,
                 COUNT(DISTINCT CASE WHEN eventType = 'open' THEN recipientId END) AS uniqueOpens,
                 COUNT(CASE WHEN eventType = 'click' THEN 1 END) AS totalClicks,
-                COUNT(DISTINCT CASE WHEN eventType = 'click' THEN recipientId END) AS uniqueClicks
+                COUNT(DISTINCT CASE WHEN eventType = 'click' THEN recipientId END) AS uniqueClicks,
+                COUNT(CASE WHEN eventType = 'sent' THEN 1 END) AS totalSent,
+                COUNT(CASE WHEN eventType = 'delivered' THEN 1 END) AS totalDeliveredEvents
              FROM ${table}
              WHERE campaignId = ?`,
             [Number(campaignId)]
@@ -58,8 +92,12 @@ export const EmailEvent = {
         const [mailStats] = await query(
             `SELECT
                 COUNT(id) AS totalRecipients,
-                COALESCE(SUM(CASE WHEN status = 1 OR sent_at IS NOT NULL OR delivery_status != 'failed' THEN 1 ELSE 0 END), 0) AS delivered,
-                COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+                COALESCE(SUM(CASE WHEN status = 1 OR sent_at IS NOT NULL OR delivery_status IN ('sent','opened','delivered') THEN 1 ELSE 0 END), 0) AS delivered,
+                COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+                COALESCE(SUM(CASE WHEN open_count > 0 OR delivery_status = 'opened' THEN 1 ELSE 0 END), 0) AS uniqueOpenedMails,
+                COALESCE(SUM(open_count), 0) AS totalOpenCount,
+                COALESCE(SUM(CASE WHEN click_count > 0 THEN 1 ELSE 0 END), 0) AS uniqueClickedMails,
+                COALESCE(SUM(click_count), 0) AS totalClickCount
              FROM mails
              WHERE campaign_id = ?`,
             [Number(campaignId)]
@@ -68,12 +106,24 @@ export const EmailEvent = {
         const totalRecipients = Number(mailStats?.totalRecipients || 0);
         const delivered = Number(mailStats?.delivered || 0);
         const failed = Number(mailStats?.failed || 0);
-        const sent = delivered;
+        const sent = Math.max(delivered, Number(eventStats?.totalSent || 0));
 
-        const uniqueOpens = Number(eventStats?.uniqueOpens || 0);
-        const totalOpens = Number(eventStats?.totalOpens || 0);
-        const uniqueClicks = Number(eventStats?.uniqueClicks || 0);
-        const totalClicks = Number(eventStats?.totalClicks || 0);
+        const uniqueOpens = Math.max(
+            Number(eventStats?.uniqueOpens || 0),
+            Number(mailStats?.uniqueOpenedMails || 0)
+        );
+        const totalOpens = Math.max(
+            Number(eventStats?.totalOpens || 0),
+            Number(mailStats?.totalOpenCount || 0)
+        );
+        const uniqueClicks = Math.max(
+            Number(eventStats?.uniqueClicks || 0),
+            Number(mailStats?.uniqueClickedMails || 0)
+        );
+        const totalClicks = Math.max(
+            Number(eventStats?.totalClicks || 0),
+            Number(mailStats?.totalClickCount || 0)
+        );
 
         const unopened = Math.max(delivered - uniqueOpens, 0);
         const openRate = delivered > 0 ? Number(((uniqueOpens / delivered) * 100).toFixed(1)) : 0;

@@ -73,6 +73,31 @@ async function migrateTrackingColumns(pool) {
     }
 }
 
+async function migrateEmailTrackingFeature(pool) {
+    try {
+        const [eeCols] = await pool.query(
+            `SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'email_events'`
+        );
+        const colMap = Object.fromEntries(eeCols.map((r) => [r.COLUMN_NAME, r.COLUMN_TYPE]));
+        if (colMap.eventType && String(colMap.eventType).startsWith("enum")) {
+            await pool.query(
+                `ALTER TABLE email_events MODIFY COLUMN eventType VARCHAR(32) NOT NULL`
+            );
+        }
+        if (!colMap.tracking_token) {
+            await pool.query(
+                `ALTER TABLE email_events ADD COLUMN tracking_token VARCHAR(64) NULL AFTER url`
+            );
+            try {
+                await pool.query(`CREATE INDEX idx_ee_token ON email_events (tracking_token)`);
+            } catch (_) {}
+        }
+    } catch (error) {
+        console.error("Could not migrate email_events tracking columns:", error.message);
+    }
+}
+
 async function migrateInfluencerTables(pool) {
     try {
         await pool.query(`CREATE TABLE IF NOT EXISTS my_influencers (
@@ -352,6 +377,7 @@ export async function runMigrations(pool) {
     await Promise.allSettled([
         migrateMailDeliveryStatus(pool),
         migrateTrackingColumns(pool),
+        migrateEmailTrackingFeature(pool),
         migrateInfluencerTables(pool),
         cleanIndependentOrganization(pool),
         ensureCampaign50(pool),

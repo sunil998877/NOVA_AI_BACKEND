@@ -9,6 +9,7 @@ import { myInfluencerSchema } from "./my-influencer.schema.js";
 import { contactSchema } from "./contact.schema.js";
 import { campaignRecipientSchema } from "./campaign-recipient.schema.js";
 import { emailEventSchema } from "./email-event.schema.js";
+import { emailTrackingLinkSchema } from "./email-tracking-link.schema.js";
 import { collaborationSchema } from "./collaboration.schema.js";
 import { collaborationMessageSchema } from "./collaboration-message.schema.js";
 
@@ -24,6 +25,7 @@ export const schemas = [
     contactSchema,
     campaignRecipientSchema,
     emailEventSchema,
+    emailTrackingLinkSchema,
     collaborationSchema,
     collaborationMessageSchema,
 ];

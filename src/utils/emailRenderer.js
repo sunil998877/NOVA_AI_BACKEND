@@ -256,30 +256,16 @@ export function renderCampaignEmail({
 
   const rawHtml = marked.parse(normalizedBodyMarkdown);
   const sanitizedHtml = sanitizeHtml(rawHtml);
-  let styledBody = applyEmailInlineStyles(sanitizedHtml);
-
-  const campaignId = campaign.id || campaign._id;
-  const recipientId = recipient.id || recipient._id || mailId;
-
-  if (enableTracking && recipientId && apiBaseUrl && /^https:\/\//i.test(apiBaseUrl) && !/localhost|127\.0\.0\.1/i.test(apiBaseUrl)) {
-    styledBody = wrapClickTracking(styledBody, campaignId, recipientId, apiBaseUrl);
-  }
-
-  let trackingPixel = "";
-  if (enableTracking && recipientId && apiBaseUrl && /^https:\/\//i.test(apiBaseUrl) && !/localhost|127\.0\.0\.1/i.test(apiBaseUrl)) {
-    const base = apiBaseUrl.replace(/\/$/, "");
-    const trackingUrl = campaignId
-      ? `${base}/api/tracking/open/${campaignId}/${recipientId}?t=${Date.now()}`
-      : `${base}/api/tracking/open/${recipientId}?t=${Date.now()}`;
-    trackingPixel = `<img src="${trackingUrl}" width="1" height="1" alt="" border="0" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;display:block;" />`;
-  }
+  const styledBody = applyEmailInlineStyles(sanitizedHtml);
 
   const recipientEmail = recipient.recipientEmail || recipient.recipient_email || recipient.email || "recipient";
   const campaignName = campaign.title || campaign.campaign_name || "NOVA Campaign";
   const orgFooter = (campaign.organization || "").trim();
   const organization = orgFooter.toLowerCase() === "independent" ? "NOVA AI" : (orgFooter || "NOVA AI");
   const currentYear = new Date().getFullYear();
-
+  void mailId;
+  void apiBaseUrl;
+  void enableTracking;
 
   const fullHtml = `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -359,7 +345,6 @@ export function renderCampaignEmail({
       </td>
     </tr>
   </table>
-  ${trackingPixel}
 </body>
 </html>`;
 
