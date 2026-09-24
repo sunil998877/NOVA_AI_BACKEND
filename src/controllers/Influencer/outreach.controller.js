@@ -366,6 +366,20 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
         apiBaseUrl = await getPublicApiUrl(req);
     } catch (_) { }
 
+    let finalHtml = htmlBody;
+    if (
+        apiBaseUrl &&
+        createdMail?.id &&
+        createdCamp?.id &&
+        /^https:\/\//i.test(apiBaseUrl) &&
+        !/localhost|127\.0\.0\.1/i.test(apiBaseUrl)
+    ) {
+        const pixel = `<img src="${apiBaseUrl.replace(/\/$/, "")}/api/tracking/open/${createdCamp.id}/${createdMail.id}?t=${Date.now()}" width="1" height="1" alt="" border="0" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;display:block;" />`;
+        finalHtml = /<\/body>/i.test(htmlBody)
+            ? htmlBody.replace(/<\/body>/i, `${pixel}</body>`)
+            : `${htmlBody}${pixel}`;
+    }
+
     const recipient = {
         id: createdMail?.id || resolvedInfluencerId || 1,
         email: recipientEmail,
@@ -375,7 +389,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
         campaign_id: campaignId,
         subject: cleanSubject,
         body: cleanMessage,
-        html: htmlBody,
+        html: finalHtml,
         senderEmail,
         senderName,
         from: fromAddress,
@@ -389,7 +403,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
         fromEmail: senderEmail,
         subject: cleanSubject,
         body: cleanMessage,
-        html: htmlBody,
+        html: finalHtml,
         action: "start_campaign",
         totalRecipients: 1,
         timestamp: new Date().toISOString(),
@@ -423,7 +437,7 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
             const smtpRes = await sendMail({
                 to: recipientEmail,
                 subject: cleanSubject,
-                html: htmlBody,
+                html: finalHtml,
                 text: cleanMessage,
                 from: fromAddress,
                 replyTo: req.user?.email || undefined,

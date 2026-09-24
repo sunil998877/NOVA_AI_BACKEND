@@ -7,6 +7,8 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { signCampaignSendToken } from "../../utils/campaign-send-token.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
 import { getPublicApiUrl } from "../../utils/urlHelper.js";
+import { sendMail } from "../../utils/mailer.js";
+import { toMysqlDateTime } from "../../utils/datetime.js";
 
 async function callN8nWebhook(payload) {
     const webhookUrl = env.n8nWebhookUrl;
@@ -270,15 +272,64 @@ export const sendCampaign = asyncHandler(async (req, res) => {
     }
 
     if (!n8nSuccess) {
+        let sent = 0;
+        let failed = 0;
+        for (const item of renderedRecipients) {
+            try {
+                await sendMail({
+                    to: item.email,
+                    subject: item.subject,
+                    html: item.html,
+                    text: item.body,
+                    from: fromAddress,
+                    replyTo: req.user?.email || undefined,
+                });
+                await Mail.updateById(item.id, {
+                    status: 1,
+                    delivery_status: "sent",
+                    sent_at: toMysqlDateTime(new Date()),
+                });
+                sent += 1;
+            } catch (err) {
+                failed += 1;
+                await Mail.updateById(item.id, {
+                    status: 0,
+                    delivery_status: "failed",
+                }).catch(() => {});
+                console.error(`[sendCampaign] SMTP failed ${item.email}:`, err.message);
+            }
+        }
+
+        const status = sent === 0 ? "failed" : "completed";
         await Campaign.updateById(campaign.id, {
-            status: "failed",
-            camp_status: "Failed",
+            status,
+            camp_status: status === "completed" ? "Completed" : "Failed",
+            sent_count: sent,
+            failed_count: failed,
+            total_recipients: totalRecipients,
         });
 
-        return res.status(502).json({
-            error: "Failed to dispatch campaign to n8n webhook",
-            details: n8nError,
+        if (sent === 0) {
+            return res.status(502).json({
+                error: "Failed to send campaign",
+                details: n8nError || "SMTP delivery failed",
+                campaignId: campaign.id,
+            });
+        }
+
+        await audit(req.user.id, "CAMPAIGN_SEND_SMTP", campaign.id, req.ip);
+
+        return res.status(200).json({
+            success: true,
             campaignId: campaign.id,
+            totalRecipients,
+            sentCount: sent,
+            failedCount: failed,
+            status,
+            n8nTriggered: false,
+            deliveryMethod: "smtp",
+            sender: fromAddress,
+            message: `Campaign sent via SMTP: ${sent}/${totalRecipients} delivered`,
         });
     }
 

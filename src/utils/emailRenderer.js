@@ -261,16 +261,17 @@ export function renderCampaignEmail({
   const campaignId = campaign.id || campaign._id;
   const recipientId = recipient.id || recipient._id || mailId;
 
-  if (enableTracking && recipientId && apiBaseUrl) {
+  if (enableTracking && recipientId && apiBaseUrl && /^https:\/\//i.test(apiBaseUrl) && !/localhost|127\.0\.0\.1/i.test(apiBaseUrl)) {
     styledBody = wrapClickTracking(styledBody, campaignId, recipientId, apiBaseUrl);
   }
 
   let trackingPixel = "";
-  if (enableTracking && recipientId && apiBaseUrl) {
+  if (enableTracking && recipientId && apiBaseUrl && /^https:\/\//i.test(apiBaseUrl) && !/localhost|127\.0\.0\.1/i.test(apiBaseUrl)) {
+    const base = apiBaseUrl.replace(/\/$/, "");
     const trackingUrl = campaignId
-      ? `${apiBaseUrl.replace(/\/$/, "")}/api/tracking/open/${campaignId}/${recipientId}`
-      : `${apiBaseUrl.replace(/\/$/, "")}/api/tracking/open/${recipientId}`;
-    trackingPixel = `<img src="${trackingUrl}" alt="" width="1" height="1" border="0" style="display:block!important;height:1px!important;width:1px!important;border:0!important;margin:0!important;padding:0!important;min-height:1px!important;min-width:1px!important;" />`;
+      ? `${base}/api/tracking/open/${campaignId}/${recipientId}?t=${Date.now()}`
+      : `${base}/api/tracking/open/${recipientId}?t=${Date.now()}`;
+    trackingPixel = `<img src="${trackingUrl}" width="1" height="1" alt="" border="0" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;display:block;" />`;
   }
 
   const recipientEmail = recipient.recipientEmail || recipient.recipient_email || recipient.email || "recipient";
