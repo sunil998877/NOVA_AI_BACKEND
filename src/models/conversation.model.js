@@ -1,4 +1,4 @@
-import { execute, query } from "../config/db.js";
+﻿import { execute, query } from "../config/db.js";
 import { conversationSchema } from "../schema/conversation.schema.js";
 import { mapRow, mapRows, placeholders } from "./mapRow.js";
 import { Message } from "./message.model.js";
@@ -120,52 +120,72 @@ export const Conversation = {
             );
         }
 
-        const data = await Promise.all(
-            rows.map(async (row) => {
-                const conv = mapRow(row);
-                const unreadCount = await Message.countUnread(conv.id, "user");
+        if (!rows.length) return [];
 
-                let lastMessageText = "";
-                let lastSenderType = "system";
-                let lastMessageAt = conv.last_message_at || conv.createdAt;
+        const convIds = rows.map((r) => r.id);
+        const idPlaceholders = convIds.map(() => "?").join(", ");
 
-                if (conv.last_message_id) {
-                    const lastMsg = await Message.findById(conv.last_message_id);
-                    if (lastMsg) {
-                        lastMessageText = lastMsg.message;
-                        lastSenderType = lastMsg.senderType;
-                        lastMessageAt = lastMsg.createdAt;
-                    }
-                } else {
-                    const recent = await Message.findByConversation(conv.id, { limit: 1 });
-                    if (recent && recent.length > 0) {
-                        lastMessageText = recent[recent.length - 1].message;
-                        lastSenderType = recent[recent.length - 1].senderType;
-                        lastMessageAt = recent[recent.length - 1].createdAt;
-                    }
-                }
+        const unreadRows = await query(
+            `SELECT conversation_id, COUNT(*) AS cnt
+             FROM messages
+             WHERE conversation_id IN (${idPlaceholders}) AND is_read = FALSE AND sender_type != 'user'
+             GROUP BY conversation_id`,
+            convIds
+        ).catch(() => []);
+        const unreadMap = Object.fromEntries(unreadRows.map((r) => [String(r.conversation_id), Number(r.cnt)]));
 
-                return {
-                    id: Number(conv.id),
-                    campaignId: conv.campaign_id ? Number(conv.campaign_id) : null,
-                    influencerId: conv.influencer_id ? Number(conv.influencer_id) : null,
-                    userId: Number(conv.user_id),
-                    status: conv.status || "active",
-                    title: conv.title,
-                    influencerName: row.influencer_name || conv.title || "Creator",
-                    influencerUsername: row.influencer_username || "",
-                    platform: row.platform || "youtube",
-                    profileImage: row.profile_image || null,
-                    recipientEmail: row.recipient_email || "",
-                    unreadCount,
-                    lastMessage: lastMessageText || "Conversation started",
-                    lastMessageAt,
-                    lastSenderType,
-                };
-            })
-        );
+        const withMsgId = rows.filter((r) => r.last_message_id);
+        const withoutMsgId = rows.filter((r) => !r.last_message_id);
 
-        return data;
+        const msgIdMap = {};
+        if (withMsgId.length) {
+            const msgIds = withMsgId.map((r) => r.last_message_id);
+            const msgIdPlaceholders = msgIds.map(() => "?").join(", ");
+            const msgRows = await query(
+                `SELECT id, conversation_id, message, sender_type, createdAt FROM messages WHERE id IN (${msgIdPlaceholders})`,
+                msgIds
+            ).catch(() => []);
+            msgRows.forEach((m) => { msgIdMap[String(m.conversation_id)] = m; });
+        }
+
+        if (withoutMsgId.length) {
+            const fallbackIds = withoutMsgId.map((r) => r.id);
+            const fbPlaceholders = fallbackIds.map(() => "?").join(", ");
+            const recentRows = await query(
+                `SELECT m.id, m.conversation_id, m.message, m.sender_type, m.createdAt
+                 FROM messages m
+                 INNER JOIN (
+                   SELECT conversation_id, MAX(id) AS max_id
+                   FROM messages
+                   WHERE conversation_id IN (${fbPlaceholders})
+                   GROUP BY conversation_id
+                 ) latest ON m.id = latest.max_id`,
+                fallbackIds
+            ).catch(() => []);
+            recentRows.forEach((m) => { msgIdMap[String(m.conversation_id)] = m; });
+        }
+
+        return rows.map((row) => {
+            const conv = mapRow(row);
+            const lastMsg = msgIdMap[String(conv.id)];
+            return {
+                id: Number(conv.id),
+                campaignId: conv.campaign_id ? Number(conv.campaign_id) : null,
+                influencerId: conv.influencer_id ? Number(conv.influencer_id) : null,
+                userId: Number(conv.user_id),
+                status: conv.status || "active",
+                title: conv.title,
+                influencerName: row.influencer_name || conv.title || "Creator",
+                influencerUsername: row.influencer_username || "",
+                platform: row.platform || "youtube",
+                profileImage: row.profile_image || null,
+                recipientEmail: row.recipient_email || "",
+                unreadCount: unreadMap[String(conv.id)] || 0,
+                lastMessage: lastMsg?.message || "Conversation started",
+                lastMessageAt: lastMsg?.createdAt || conv.last_message_at || conv.createdAt,
+                lastSenderType: lastMsg?.sender_type || "system",
+            };
+        });
     },
 
     async updateLastMessage(id, messageId, messageAt) {

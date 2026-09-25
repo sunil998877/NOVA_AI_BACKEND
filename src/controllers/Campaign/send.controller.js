@@ -1,5 +1,6 @@
+﻿
+import { execute } from "../../config/db.js";
 import { env } from "../../config/env.js";
-import { fetchWithTimeout } from "../../utils/fetch.js";
 import { Campaign } from "../../models/campaign.model.js";
 import { Mail } from "../../models/mail.model.js";
 import { audit } from "../../utils/audit.js";
@@ -7,105 +8,10 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { signCampaignSendToken } from "../../utils/campaign-send-token.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
 import { getPublicApiUrl } from "../../utils/urlHelper.js";
-import { sendMail } from "../../utils/mailer.js";
 import { toMysqlDateTime } from "../../utils/datetime.js";
-import { prepareEmailTracking, recordMailDelivered } from "../../utils/emailTracking.js";
-
-async function callN8nWebhook(payload) {
-    const webhookUrl = env.n8nWebhookUrl;
-    if (!webhookUrl) return null;
-
-    const method = String(env.n8nWebhookMethod || "POST").toUpperCase();
-    const headers = {
-        "User-Agent": "NovaAI-Backend/1.0",
-    };
-
-    if (env.n8nUser && env.n8nPassword) {
-        headers.Authorization = `Basic ${Buffer.from(`${env.n8nUser}:${env.n8nPassword}`).toString("base64")}`;
-    }
-
-    if (method !== "GET") {
-        headers["Content-Type"] = "application/json";
-
-        if (webhookUrl.includes("/webhook/")) {
-            const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
-            fetchWithTimeout(testUrl, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(payload),
-            }, 2000)
-                .then((r) => {
-                    if (r.ok) console.log("[n8n] Test webhook canvas triggered (POST):", r.status);
-                })
-                .catch(() => { });
-        }
-
-        const res = await fetchWithTimeout(webhookUrl, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payload),
-        });
-        console.log("[n8n] POST response:", res.status);
-        return res;
-    }
-
-    const firstRecipient = (payload.recipients && payload.recipients[0]) || {};
-    const effectiveSenderName = payload.senderName || env.novaSenderName;
-    const effectiveSenderEmail = payload.senderEmail || env.novaSenderEmail;
-    const query = new URLSearchParams({
-        campaignId: String(payload.campaignId),
-        action: payload.action || "start_campaign",
-        timestamp: payload.timestamp || new Date().toISOString(),
-        totalRecipients: String(payload.totalRecipients ?? 0),
-        senderEmail: effectiveSenderEmail,
-        senderName: effectiveSenderName,
-        from: payload.from || `"${effectiveSenderName}" <${effectiveSenderEmail}>`,
-    });
-    if (payload.subject) query.set("subject", payload.subject);
-    if (payload.body) query.set("body", payload.body);
-    if (payload.html) query.set("html", payload.html);
-    if (payload.accessToken) query.set("accessToken", payload.accessToken);
-    if (payload.apiBaseUrl) query.set("apiBaseUrl", payload.apiBaseUrl);
-
-    if (firstRecipient.email || firstRecipient.recipientEmail) {
-        const toEmail = firstRecipient.email || firstRecipient.recipientEmail;
-        const toName = firstRecipient.recipientName || firstRecipient.full_name || "";
-        query.set("to", toEmail);
-        query.set("email", toEmail);
-        query.set("recipientEmail", toEmail);
-        if (toName) query.set("recipientName", toName);
-    }
-
-    if (payload.recipients) {
-        const compact = payload.recipients.map((r) => ({
-            id: r.id,
-            email: r.email || r.recipientEmail,
-            recipientEmail: r.recipientEmail || r.email,
-            full_name: r.full_name || r.recipientName || "",
-            recipientName: r.recipientName || r.full_name || "",
-        }));
-        query.set("recipients", JSON.stringify(compact));
-    }
-
-    const fullUrl = `${webhookUrl}?${query}`;
-    console.log("[n8n] GET →", webhookUrl, "| campaignId:", payload.campaignId, "| recipients:", payload.totalRecipients);
-
-    if (webhookUrl.includes("/webhook/")) {
-        const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
-        fetchWithTimeout(`${testUrl}?${query}`, { method: "GET", headers }, 2000)
-            .then((r) => {
-                if (r.ok) console.log("[n8n] Test webhook canvas triggered (GET):", r.status);
-            })
-            .catch(() => { });
-    }
-
-    const res = await fetchWithTimeout(fullUrl, {
-        method: "GET",
-        headers,
-    });
-    console.log("[n8n] GET response:", res.status);
-    return res;
-}
+import { prepareEmailTracking } from "../../utils/emailTracking.js";
+import { callN8nWebhook } from "../../utils/n8n.js";
+import { runCampaignDeliveryInBackground } from "../../utils/deliveryChain.js";
 
 export const sendCampaign = asyncHandler(async (req, res) => {
     const campaignId = req.params.campaignId || req.params.id;
@@ -115,8 +21,9 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         return res.status(403).json({ error: "Access denied: You do not own this campaign" });
     }
 
-    if (String(campaign.status || "").toLowerCase() === "processing") {
+    const currentStatus = String(campaign.status || "").toLowerCase();
 
+    if (currentStatus === "processing") {
         const updatedAt = campaign.updatedAt ? new Date(campaign.updatedAt).getTime() : 0;
         const isStale = (Date.now() - updatedAt) > 60_000;
         if (!isStale && !req.body?.force) {
@@ -126,16 +33,21 @@ export const sendCampaign = asyncHandler(async (req, res) => {
                 status: "processing",
             });
         }
-        console.warn(`[sendCampaign] Recovering processing campaign ${campaign.id}`);
+        console.warn(`[sendCampaign] Recovering stale processing campaign ${campaign.id}`);
+    }
+
+    if (currentStatus === "completed" || req.body?.force) {
+        await Campaign.updateById(campaign.id, {
+            status: "draft",
+            camp_status: "Draft",
+            sent_count: 0,
+            failed_count: 0,
+        });
+        console.log(`[sendCampaign] Reset campaign ${campaign.id} for resend`);
     }
 
     const recipients = await Mail.findByCampaignId(campaign.id);
-
-
     const totalRecipients = recipients.length;
-
-    console.log("receipt name : ", recipients[0].full_name);
-
 
     if (totalRecipients === 0) {
         return res.status(400).json({
@@ -145,9 +57,6 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         });
     }
 
-    const rawSubject = campaign.subject || `Campaign: ${campaign.title}`;
-    const rawBody = campaign.body || `Hello {{recipientName}},\n\nThis is ${campaign.title}.\n\nBest regards,<br>{{senderName}}`;
-
     await Campaign.updateById(campaign.id, {
         status: "processing",
         camp_status: "Processing",
@@ -155,13 +64,6 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         sent_count: 0,
         failed_count: 0,
     });
-
-    const accessToken = signCampaignSendToken({
-        campaignId: campaign.id,
-        userId: req.user.id,
-    });
-
-    const apiBaseUrl = await getPublicApiUrl(req);
 
     const senderEmail = (
         campaign.sender_email ||
@@ -184,6 +86,14 @@ export const sendCampaign = asyncHandler(async (req, res) => {
 
     const fromAddress = `"${senderName}" <${senderEmail}>`;
 
+    const accessToken = signCampaignSendToken({ campaignId: campaign.id, userId: req.user.id });
+    const apiBaseUrl = await getPublicApiUrl(req);
+
+    const rawSubject = campaign.subject || `Campaign: ${campaign.title}`;
+    const rawBody =
+        campaign.body ||
+        `Hello {{recipientName}},\n\nThis is ${campaign.title}.\n\nBest regards,<br>{{senderName}}`;
+
     const renderedRecipients = await Promise.all(
         recipients.map(async (mail) => {
             const rendered = renderCampaignEmail({
@@ -200,9 +110,9 @@ export const sendCampaign = asyncHandler(async (req, res) => {
                     id: campaign.id,
                     title: campaign.title,
                     sender_name: senderName,
-                    senderName: senderName,
+                    senderName,
                     sender_email: senderEmail,
-                    senderEmail: senderEmail,
+                    senderEmail,
                     workMail: campaign.workMail,
                 },
                 mailId: mail.id,
@@ -233,20 +143,21 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         })
     );
 
-    const firstItem = renderedRecipients[0] || {};
-    const primarySubject = firstItem.subject || rawSubject;
-    const primaryBody = firstItem.body || rawBody;
-    const primaryHtml = firstItem.html || "";
+    await execute(
+        `UPDATE mails SET status = 0, delivery_status = 'pending' WHERE campaign_id = ?`,
+        [campaign.id]
+    );
 
-    const payload = {
+    const firstItem = renderedRecipients[0] || {};
+    const n8nPayload = {
         campaignId: campaign.id,
         senderEmail,
         senderName,
         from: fromAddress,
         fromEmail: senderEmail,
-        subject: primarySubject,
-        body: primaryBody,
-        html: primaryHtml,
+        subject: firstItem.subject || rawSubject,
+        body: firstItem.body || rawBody,
+        html: firstItem.html || "",
         action: "start_campaign",
         totalRecipients,
         timestamp: new Date().toISOString(),
@@ -256,106 +167,52 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         data: renderedRecipients,
     };
 
-    for (const mail of recipients) {
-        await Mail.updateById(mail.id, {
-            status: 0,
-            delivery_status: "pending",
-        });
-    }
-
-    let n8nSuccess = false;
-    let n8nError = null;
     if (env.n8nWebhookUrl) {
         try {
-            const n8nRes = await callN8nWebhook(payload);
-            n8nSuccess = n8nRes && n8nRes.ok;
-            if (!n8nSuccess && n8nRes) {
-                n8nError = `n8n responded with status ${n8nRes.status}`;
+            console.log(`[sendCampaign] n8n primary attempt for campaign ${campaign.id}`);
+            const n8nRes = await callN8nWebhook(n8nPayload);
+            if (n8nRes && n8nRes.ok) {
+                await audit(req.user.id, "CAMPAIGN_SEND", campaign.id, req.ip);
+                return res.status(200).json({
+                    success: true,
+                    campaignId: campaign.id,
+                    totalRecipients,
+                    sentCount: 0,
+                    failedCount: 0,
+                    status: "processing",
+                    n8nTriggered: true,
+                    deliveryMethod: "n8n",
+                    sender: fromAddress,
+                    message: `Campaign queued: ${totalRecipients} recipient(s) dispatched to n8n SMTP worker`,
+                });
             }
+            console.warn(`[sendCampaign] n8n primary responded with status ${n8nRes?.status}`);
         } catch (err) {
-            console.error("[sendCampaign] n8n webhook error:", err.message);
-            n8nError = err.message;
+            console.warn(`[sendCampaign] n8n primary failed: ${err.message}, switching to SMTP`);
         }
     } else {
-        n8nError = "N8N_WEBHOOK_URL is not configured in backend environment";
+        console.log("[sendCampaign] n8n not configured, using SMTP directly");
     }
 
-    if (!n8nSuccess) {
-        let sent = 0;
-        let failed = 0;
-        for (const item of renderedRecipients) {
-            try {
-                await sendMail({
-                    to: item.email,
-                    subject: item.subject,
-                    html: item.html,
-                    text: item.body,
-                    from: fromAddress,
-                    replyTo: req.user?.email || undefined,
-                });
-                await Mail.updateById(item.id, {
-                    status: 1,
-                    delivery_status: "sent",
-                    sent_at: toMysqlDateTime(new Date()),
-                });
-                await recordMailDelivered(item.id, campaign.id);
-                sent += 1;
-            } catch (err) {
-                failed += 1;
-                await Mail.updateById(item.id, {
-                    status: 0,
-                    delivery_status: "failed",
-                }).catch(() => {});
-                console.error(`[sendCampaign] SMTP failed ${item.email}:`, err.message);
-            }
-        }
-
-        const status = sent === 0 ? "failed" : "completed";
-        await Campaign.updateById(campaign.id, {
-            status,
-            camp_status: status === "completed" ? "Completed" : "Failed",
-            sent_count: sent,
-            failed_count: failed,
-            total_recipients: totalRecipients,
-        });
-
-        if (sent === 0) {
-            return res.status(502).json({
-                error: "Failed to send campaign",
-                details: n8nError || "SMTP delivery failed",
-                campaignId: campaign.id,
-            });
-        }
-
-        await audit(req.user.id, "CAMPAIGN_SEND_SMTP", campaign.id, req.ip);
-
-        return res.status(200).json({
-            success: true,
-            campaignId: campaign.id,
-            totalRecipients,
-            sentCount: sent,
-            failedCount: failed,
-            status,
-            n8nTriggered: false,
-            deliveryMethod: "smtp",
-            sender: fromAddress,
-            message: `Campaign sent via SMTP: ${sent}/${totalRecipients} delivered`,
-        });
-    }
-
-    await audit(req.user.id, "CAMPAIGN_SEND", campaign.id, req.ip);
-
-    return res.status(200).json({
+    res.status(202).json({
         success: true,
         campaignId: campaign.id,
         totalRecipients,
         sentCount: 0,
         failedCount: 0,
         status: "processing",
-        n8nTriggered: true,
+        n8nTriggered: false,
+        deliveryMethod: "smtp",
         sender: fromAddress,
-        message: `Campaign queued: ${totalRecipients} recipient(s) dispatched to n8n SMTP worker`,
+        message: `Campaign queued: sending ${totalRecipients} email(s) via SMTP`,
     });
 
-
+    runCampaignDeliveryInBackground({
+        renderedRecipients,
+        campaign,
+        fromAddress,
+        fullPayload: n8nPayload,
+        userId: req.user.id,
+        replyTo: req.user?.email || undefined,
+    });
 });

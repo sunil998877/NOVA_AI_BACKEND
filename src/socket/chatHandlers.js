@@ -18,13 +18,13 @@ export function registerChatHandlers(io, socket) {
     }
 
     if (isFirstConnection) {
-        io.emit("user:online", { userId: user.id, role: user.role });
+        socket.broadcast.emit("user:online", { userId: user.id, role: user.role });
         if (user.collabId) {
-            io.emit("user:online", { userId: String(user.collabId), role: user.role });
-            io.emit("user:online", { userId: `inf-${user.collabId}`, role: user.role });
+            socket.broadcast.emit("user:online", { userId: String(user.collabId), role: user.role });
+            socket.broadcast.emit("user:online", { userId: `inf-${user.collabId}`, role: user.role });
         }
         if (user.influencerId) {
-            io.emit("user:online", { userId: String(user.influencerId), role: user.role });
+            socket.broadcast.emit("user:online", { userId: String(user.influencerId), role: user.role });
         }
     }
 

@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+﻿import bcrypt from "bcrypt";
 import { User } from "../../models/user.model.js";
 import { verifyCaptcha } from "../../utils/captcha.js";
 import { signAuthToken } from "../../utils/jwt.js";

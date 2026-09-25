@@ -1,6 +1,5 @@
-import dotenv from "dotenv";
+﻿import dotenv from "dotenv";
 dotenv.config();
-
 
 const parseOrigins = (value) => {
     const defaultOrigins = [

@@ -1,4 +1,4 @@
-export async function getPublicApiUrl(req = null) {
+﻿export async function getPublicApiUrl(req = null) {
   const clean = (value) => String(value || "").trim().replace(/\/$/, "");
   const isLocal = (url) => /localhost|127\.0\.0\.1/i.test(url || "");
   const isPublicHttps = (url) =>

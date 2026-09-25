@@ -1,4 +1,4 @@
-import jwt from "jsonwebtoken";
+﻿import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { User } from "../models/user.model.js";
 import { Collaboration } from "../models/collaboration.model.js";

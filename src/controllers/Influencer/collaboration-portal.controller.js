@@ -1,4 +1,4 @@
-import { asyncHandler } from "../../utils/asyncHandler.js";
+﻿import { asyncHandler } from "../../utils/asyncHandler.js";
 import { query } from "../../config/db.js";
 import { Collaboration } from "../../models/collaboration.model.js";
 import { CollaborationMessage } from "../../models/collaboration-message.model.js";
@@ -208,4 +208,3 @@ export const getChatCount = asyncHandler(async (req, res) => {
         count: unread > 0 ? unread : total,
     });
 });
-

@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import { authenticate, authenticateUserOrN8n } from "../middleware/auth.middleware.js";
 import { listCampaigns } from "../controllers/Campaign/list.controller.js";
 import { getCampaign } from "../controllers/Campaign/get.controller.js";
@@ -32,4 +32,3 @@ router.patch("/:id", authenticateUserOrN8n, updateCampaign);
 router.delete("/:id", authenticate, deleteCampaign);
 
 export default router;
-

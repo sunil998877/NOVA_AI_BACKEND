@@ -1,4 +1,4 @@
-export const myInfluencerSchema = {
+﻿export const myInfluencerSchema = {
     table: "my_influencers",
     columns: "id, user_id, influencer_id, status, category, notes, lastContact, createdAt, updatedAt",
     updatable: ["status", "category", "notes", "lastContact"],
@@ -17,4 +17,3 @@ export const myInfluencerSchema = {
         INDEX idx_my_inf_influencer (influencer_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 };
-

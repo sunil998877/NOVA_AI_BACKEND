@@ -1,4 +1,4 @@
-import crypto from "crypto";
+﻿import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { Campaign } from "../../models/campaign.model.js";
 import { Mail } from "../../models/mail.model.js";

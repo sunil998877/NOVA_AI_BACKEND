@@ -1,8 +1,29 @@
-import jwt from "jsonwebtoken";
+﻿import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { User } from "../models/user.model.js";
 import { toPublicUser } from "../utils/user.js";
 import { verifyCampaignSendToken } from "../utils/campaign-send-token.js";
+
+const USER_CACHE_TTL_MS = 5 * 60 * 1000;
+const userCache = new Map();
+
+function getCachedUser(id) {
+    const entry = userCache.get(String(id));
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+        userCache.delete(String(id));
+        return null;
+    }
+    return entry.user;
+}
+
+function setCachedUser(id, user) {
+
+    if (userCache.size >= 500) {
+        userCache.delete(userCache.keys().next().value);
+    }
+    userCache.set(String(id), { user, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+}
 
 const bearerToken = (req) => {
     const header = req.headers.authorization;
@@ -43,7 +64,11 @@ export const authenticate = async (req, res, next) => {
 
         const campaignSend = verifyCampaignSendToken(token);
         if (campaignSend) {
-            const user = campaignSend.userId ? await User.findById(campaignSend.userId) : null;
+            let user = campaignSend.userId ? getCachedUser(campaignSend.userId) : null;
+            if (!user && campaignSend.userId) {
+                user = await User.findById(campaignSend.userId);
+                if (user) setCachedUser(campaignSend.userId, user);
+            }
             req.n8nCampaignId = campaignSend.campaignId;
             req.authVia = "n8n_campaign_token";
             if (user) {
@@ -56,7 +81,12 @@ export const authenticate = async (req, res, next) => {
         }
 
         const payload = jwt.verify(token, env.jwtSecret);
-        const user = await User.findById(payload.sub);
+
+        let user = getCachedUser(payload.sub);
+        if (!user) {
+            user = await User.findById(payload.sub);
+            if (user) setCachedUser(payload.sub, user);
+        }
 
         if (!user) {
             return res.status(401).json({ error: "Invalid token" });
@@ -73,7 +103,6 @@ export const authenticate = async (req, res, next) => {
         return res.status(401).json({ error: "Invalid token" });
     }
 };
-
 
 export const authenticateUserOrN8n = async (req, res, next) => {
     if (matchesN8nBasicAuth(req)) {

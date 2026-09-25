@@ -1,4 +1,4 @@
-import { tableStatements } from "../schema/index.js";
+﻿import { tableStatements } from "../schema/index.js";
 
 async function migrateCampaignCopyColumns(pool) {
     try {
@@ -385,4 +385,3 @@ export async function runMigrations(pool) {
         migrateChatSchema(pool),
     ]);
 }
-

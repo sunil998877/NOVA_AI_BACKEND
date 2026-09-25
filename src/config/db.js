@@ -1,4 +1,4 @@
-import mysql from "mysql2/promise";
+﻿import mysql from "mysql2/promise";
 import { env } from "./env.js";
 import { runMigrations } from "./migrations.js";
 
@@ -44,7 +44,9 @@ export const connectDb = async () => {
             password,
             database,
             waitForConnections: true,
-            connectionLimit: 10,
+            connectionLimit: 20,
+            queueLimit: 0,
+            idleTimeout: 60000,
             connectTimeout: 20000,
         };
 

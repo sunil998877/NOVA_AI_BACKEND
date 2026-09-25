@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import cors from "cors";
 import JSON5 from "json5";
 import { env } from "./config/env.js";
@@ -85,7 +85,6 @@ app.use((err, req, res, next) => {
 });
 app.use(express.urlencoded({ extended: true }));
 
-
 app.use((req, _res, next) => {
     req.body = req.body || {};
     next();
@@ -113,7 +112,6 @@ app.use("/api/track", trackRoutes);
 app.use("/api/tracking", trackRoutes);
 app.use("/api/collab", collaborationRoutes);
 app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
-
 
 app.use((err, _req, res, _next) => {
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) {

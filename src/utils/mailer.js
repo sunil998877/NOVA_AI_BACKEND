@@ -1,187 +1,26 @@
-import nodemailer from "nodemailer";
+﻿
 import { env } from "../config/env.js";
-import { fetchWithTimeout } from "./fetch.js";
-
-function getTransporter(portOverride) {
-  const port = portOverride || env.smtp.port;
-  return nodemailer.createTransport({
-    host: env.smtp.host,
-    port,
-    secure: port === 465,
-    auth: {
-      user: env.smtp.user,
-      pass: env.smtp.pass,
-    },
-    tls: {
-      rejectUnauthorized: false,
-    },
-    connectionTimeout: 12000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
-}
-
-async function sendViaN8nWebhook({ to, subject, html, text, from }) {
-  const webhookUrl = env.n8nWebhookUrl;
-  if (!webhookUrl) return null;
-
-  const senderName = env.novaSenderName || "NOVA AI";
-  const senderEmail = env.smtp.user || env.novaSenderEmail || "nova@evokeaisolutions.com";
-  const effectiveFrom = from || `"${senderName}" <${senderEmail}>`;
-
-  const payload = {
-    action: "start_campaign",
-    to,
-    email: to,
-    recipientEmail: to,
-    recipientName: "",
-    subject,
-    body: text || (html ? html.replace(/<[^>]+>/g, "") : ""),
-    html,
-    from: effectiveFrom,
-    senderEmail,
-    senderName,
-    timestamp: new Date().toISOString(),
-    totalRecipients: 1,
-    recipients: [
-      {
-        id: 1,
-        email: to,
-        recipientEmail: to,
-        full_name: "",
-        recipientName: "",
-      }
-    ],
-  };
-
-  const method = String(env.n8nWebhookMethod || "POST").toUpperCase();
-  const headers = {
-    "User-Agent": "NovaAI-Mailer/1.0",
-  };
-
-  if (env.n8nUser && env.n8nPassword) {
-    headers.Authorization = `Basic ${Buffer.from(`${env.n8nUser}:${env.n8nPassword}`).toString("base64")}`;
-  }
-
-  if (method !== "GET") {
-    headers["Content-Type"] = "application/json";
-
-    if (webhookUrl.includes("/webhook/")) {
-      const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
-      fetchWithTimeout(testUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      }, 2000).catch(() => { });
-    }
-
-    const res = await fetchWithTimeout(webhookUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-    }, 15000);
-
-    if (!res.ok) {
-      throw new Error(`n8n webhook responded with status ${res.status}`);
-    }
-
-    return { messageId: `n8n-${Date.now()}`, deliveryMethod: "n8n_webhook" };
-  }
-
-  const query = new URLSearchParams({
-    campaignId: String(Date.now()),
-    action: "start_campaign",
-    timestamp: payload.timestamp,
-    totalRecipients: "1",
-    senderEmail,
-    senderName,
-    from: effectiveFrom,
-    to,
-    email: to,
-    recipientEmail: to,
-    subject: subject || "",
-    body: payload.body || "",
-    html: html || "",
-    recipients: JSON.stringify(payload.recipients),
-  });
-
-  const fullUrl = `${webhookUrl}?${query}`;
-
-  if (webhookUrl.includes("/webhook/")) {
-    const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
-    fetchWithTimeout(`${testUrl}?${query}`, { method: "GET", headers }, 2000).catch(() => { });
-  }
-
-  const res = await fetchWithTimeout(fullUrl, {
-    method: "GET",
-    headers,
-  }, 15000);
-
-  if (!res.ok) {
-    throw new Error(`n8n webhook responded with status ${res.status}`);
-  }
-
-  return { messageId: `n8n-${Date.now()}`, deliveryMethod: "n8n_webhook" };
-}
-
+import { deliverEmail } from "./deliveryChain.js";
 
 export async function sendMail({ to, subject, html, text, from, replyTo, headers }) {
-  const senderName = env.novaSenderName || "NOVA AI";
-  const senderEmail = env.smtp.user || env.novaSenderEmail || "nova@evokeaisolutions.com";
-  const effectiveFrom = from || env.smtp.from || `"${senderName}" <${senderEmail}>`;
+    const senderName = env.novaSenderName || "NOVA AI";
+    const senderEmail = env.smtp.user || env.novaSenderEmail || "nova@evokeaisolutions.com";
+    const effectiveFrom = from || env.smtp.from || `"${senderName}" <${senderEmail}>`;
 
-  let primaryErr = null;
-  try {
-    const transporter = getTransporter(env.smtp.port || 587);
-    const info = await transporter.sendMail({
-      from: effectiveFrom,
-      to,
-      subject,
-      html,
-      text: text || (html ? html.replace(/<[^>]+>/g, "") : ""),
-      replyTo: replyTo || undefined,
-      headers: headers || undefined,
+    return deliverEmail({
+        to,
+        subject,
+        html,
+        text,
+        from: effectiveFrom,
+        replyTo,
+        headers,
     });
-    return { ...info, deliveryMethod: "smtp" };
-  } catch (err) {
-    primaryErr = err;
-    console.warn("Primary SMTP failed, trying port 465 SSL:", err.message);
-  }
-
-  try {
-    const fallbackPort = env.smtp.port === 465 ? 587 : 465;
-    const fallbackTransporter = getTransporter(fallbackPort);
-    const info = await fallbackTransporter.sendMail({
-      from: effectiveFrom,
-      to,
-      subject,
-      html,
-      text: text || (html ? html.replace(/<[^>]+>/g, "") : ""),
-      replyTo: replyTo || undefined,
-      headers: headers || undefined,
-    });
-    return { ...info, deliveryMethod: "smtp_ssl" };
-  } catch (fallbackErr) {
-    console.warn("Fallback SMTP failed, trying n8n webhook:", fallbackErr.message);
-  }
-
-  if (env.n8nWebhookUrl) {
-    try {
-      const n8nResult = await sendViaN8nWebhook({ to, subject, html, text, from: effectiveFrom });
-      if (n8nResult) {
-        return n8nResult;
-      }
-    } catch (n8nErr) {
-      console.error("n8n delivery failed:", n8nErr.message);
-    }
-  }
-
-  throw primaryErr || new Error("Failed to send email through all available mail channels");
 }
 
 export async function sendPasswordResetEmail({ to, resetUrl }) {
-  const subject = "Reset your NOVA password";
-  const html = `
+    const subject = "Reset your NOVA password";
+    const html = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -235,5 +74,5 @@ export async function sendPasswordResetEmail({ to, resetUrl }) {
 </body>
 </html>`;
 
-  return sendMail({ to, subject, html });
+    return sendMail({ to, subject, html });
 }

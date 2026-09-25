@@ -1,4 +1,4 @@
-import { Conversation } from "../../models/conversation.model.js";
+﻿import { Conversation } from "../../models/conversation.model.js";
 import { Message } from "../../models/message.model.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { getOpenAiClient } from "./client.js";

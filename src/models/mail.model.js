@@ -1,4 +1,4 @@
-import { execute, query } from "../config/db.js";
+﻿import { execute, query } from "../config/db.js";
 import { mailSchema } from "../schema/mail.schema.js";
 import { mapRow, placeholders } from "./mapRow.js";
 
@@ -15,8 +15,6 @@ const mapMail = (row) => {
 export const Mail = {
     async findById(id) {
         const rows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [id]);
-
-
 
         return mapMail(rows[0]);
     },

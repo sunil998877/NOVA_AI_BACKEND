@@ -1,4 +1,4 @@
-import { marked } from "marked";
+﻿import { marked } from "marked";
 import { env } from "../config/env.js";
 
 marked.setOptions({
@@ -53,10 +53,8 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
 
   let resolved = text;
 
-
   const signatureRecipientPattern = /(Best\s+regards,?\s*(?:<br\s*\/?>)?\s*)(?:\{\{\s*(?:recipient_name|recipientName|full_name|fullName|name)\s*\}\}|\[\s*Recipient(?:'s)?\s*Name\s*\]|\[\s*Recipient\s*\])/gi;
   resolved = resolved.replace(signatureRecipientPattern, (match, prefix) => `${prefix}{{senderName}}`);
-
 
   const namePatterns = [
     /\{\{\s*(?:recipient_name|recipientName|full_name|fullName|name)\s*\}\}/gi,
@@ -71,12 +69,9 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
     resolved = resolved.replace(pattern, greetingFallback);
   }
 
-
   resolved = resolved.replace(/\{\{\s*(?:first_name|firstName)\s*\}\}/gi, firstName || "there");
 
-
   resolved = resolved.replace(/\{\{\s*(?:recipient_email|recipientEmail|email)\s*\}\}/gi, email);
-
 
   const companyPatterns = [
     /\{\{\s*(?:company|organization|org)\s*\}\}/gi,
@@ -86,9 +81,7 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
     resolved = resolved.replace(pattern, organization || "your company");
   }
 
-
   resolved = resolved.replace(/\{\{\s*campaign_title\s*\}\}/gi, campaignTitle);
-
 
   const senderPatterns = [
     /\{\{\s*(?:sender_name|senderName)\s*\}\}/gi,
@@ -100,11 +93,9 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
     resolved = resolved.replace(pattern, senderName);
   }
 
-
   resolved = resolved.replace(/\[\s*Insert\s*Link\s*\]/gi, "Click here");
   resolved = resolved.replace(/\[\s*(?:Your\s*Title|Title)\s*\]/gi, "Team");
   resolved = resolved.replace(/\[\s*(?:Product|Service)\s*Name\s*\]/gi, campaignTitle || "our services");
-
 
   resolved = resolved.replace(/,\s*independent(?=[ \t]*(?:\r?\n|$))/gi, "");
   resolved = resolved.replace(/^[ \t]*independent[ \t]*(?:\r?\n|$)/gim, "");
@@ -112,10 +103,8 @@ export function resolvePlaceholders(text, recipient = {}, campaign = {}) {
   return resolved;
 }
 
-
 function applyEmailInlineStyles(html) {
   let styled = html;
-
 
   styled = styled.replace(
     /<h1>/gi,
@@ -130,12 +119,10 @@ function applyEmailInlineStyles(html) {
     '<h3 style="margin: 16px 0 10px 0; color: #374151; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 17px; font-weight: 600; line-height: 1.4;">'
   );
 
-
   styled = styled.replace(
     /<p>/gi,
     '<p style="margin: 0 0 16px 0; color: #374151; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.65; word-break: break-word;">'
   );
-
 
   styled = styled.replace(
     /<ul>/gi,
@@ -150,7 +137,6 @@ function applyEmailInlineStyles(html) {
     '<li style="margin-bottom: 8px; padding-left: 4px;">'
   );
 
-
   styled = styled.replace(
     /<strong>/gi,
     '<strong style="color: #111827; font-weight: 600;">'
@@ -160,18 +146,15 @@ function applyEmailInlineStyles(html) {
     '<em style="color: #4b5563;">'
   );
 
-
   styled = styled.replace(
     /<blockquote>/gi,
     '<blockquote style="margin: 0 0 20px 0; padding: 12px 18px; border-left: 4px solid #ef5a2e; background-color: #fef7f5; color: #4b5563; font-style: italic; border-radius: 0 8px 8px 0;">'
   );
 
-
   styled = styled.replace(
     /<hr\s*\/?>/gi,
     '<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />'
   );
-
 
   styled = styled.replace(
     /<p>\s*<a\s+href="([^"]+)"(?:\s+[^>]*)?>\s*(?:CTA:\s*)?([^<]+?)\s*<\/a>\s*<\/p>/gi,
@@ -192,7 +175,6 @@ function applyEmailInlineStyles(html) {
       return match;
     }
   );
-
 
   styled = styled.replace(
     /<a\s+(?!style=)(href="[^"]+")/gi,
@@ -304,7 +286,7 @@ export function renderCampaignEmail({
     <tr>
       <td align="center" style="padding: 32px 16px;">
         <table border="0" cellpadding="0" cellspacing="0" width="600" class="email-container" role="presentation" style="max-width: 600px; width: 100%;">
-          
+
           <!-- BRAND / TOP ACCENT -->
           <tr>
             <td align="center" style="padding-bottom: 20px;">
@@ -322,7 +304,7 @@ export function renderCampaignEmail({
           <!-- MAIN CARD -->
           <tr>
             <td class="content-cell" style="background-color: #ffffff; border-radius: 16px; padding: 36px 40px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); border: 1px solid rgba(0, 0, 0, 0.05);">
-              
+
               <!-- EMAIL BODY CONTENT -->
               ${styledBody}
 
@@ -347,7 +329,6 @@ export function renderCampaignEmail({
   </table>
 </body>
 </html>`;
-
 
   const plainText = generatePlainText(body, recipient, campaign);
 
