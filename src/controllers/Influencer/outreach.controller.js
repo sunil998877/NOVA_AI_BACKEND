@@ -1,4 +1,4 @@
-﻿import crypto from "crypto";
+import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { Campaign } from "../../models/campaign.model.js";
 import { Mail } from "../../models/mail.model.js";
@@ -262,7 +262,6 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
 <head><meta charset="UTF-8"/></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 620px; margin: 0 auto; padding: 24px 16px; background-color: #f8fafc;">
   <div style="background-color: #ffffff; padding: 32px; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
-    <!-- Header Badge & Subject -->
     <div style="margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #f1f5f9;">
       <span style="display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #0d9488; background: #ccfbf1; padding: 4px 10px; border-radius: 9999px;">
         Partnership Opportunity
@@ -272,10 +271,8 @@ export const sendInfluencerOutreach = asyncHandler(async (req, res) => {
       </h2>
     </div>
 
-    <!-- Message Content -->
     <div style="white-space: pre-wrap; font-size: 15px; color: #334155; line-height: 1.65; margin-bottom: 28px;">${cleanMessage.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
 
-    <!-- Interactive Call to Action Banner -->
     <div style="background: linear-gradient(135deg, #f0fdfa 0%, #f8fafc 100%); border: 1px solid #99f6e4; border-radius: 10px; padding: 20px; margin: 28px 0; text-align: left;">
       <h3 style="margin: 0 0 6px 0; font-size: 15px; font-weight: 700; color: #0f766e;">
         🤝 Ready to discuss deliverables or rates?

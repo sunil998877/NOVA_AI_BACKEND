@@ -1,16 +1,10 @@
--- ==========================================================
--- NOVA Database Schema Dump for FreeSQLDatabase (phpMyAdmin)
--- Database Target: sql12836921 @ sql12.freesqldatabase.com
--- Compatible with MySQL 5.5 / 5.6 / 5.7 / 8.0 & MariaDB
--- ==========================================================
+
 
 SET FOREIGN_KEY_CHECKS = 0;
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 SET time_zone = "+00:00";
 
--- --------------------------------------------------------
--- Table structure for table: users
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `users` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `fullName` VARCHAR(255) NOT NULL,
@@ -25,9 +19,7 @@ CREATE TABLE IF NOT EXISTS `users` (
     `updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: campaigns
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `campaigns` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `title` VARCHAR(255) NOT NULL,
@@ -50,9 +42,7 @@ CREATE TABLE IF NOT EXISTS `campaigns` (
     CONSTRAINT `fk_campaigns_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: mails
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `mails` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `campaign_id` INT NOT NULL,
@@ -74,9 +64,6 @@ CREATE TABLE IF NOT EXISTS `mails` (
     CONSTRAINT `fk_mails_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: conversations
--- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `conversations` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `user_id` INT NOT NULL,
@@ -89,9 +76,7 @@ CREATE TABLE IF NOT EXISTS `conversations` (
     CONSTRAINT `fk_conversations_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: messages
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `messages` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `conversation_id` INT NOT NULL,
@@ -105,9 +90,7 @@ CREATE TABLE IF NOT EXISTS `messages` (
     CONSTRAINT `fk_messages_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: audit_logs
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `audit_logs` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `user_id` INT NOT NULL,
@@ -120,9 +103,6 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
     CONSTRAINT `fk_audit_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: influencers
--- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `influencers` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `platform` VARCHAR(50) NOT NULL,
@@ -158,9 +138,7 @@ CREATE TABLE IF NOT EXISTS `my_influencers` (
     CONSTRAINT `fk_my_inf_influencer` FOREIGN KEY (`influencer_id`) REFERENCES `influencers`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: contacts
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `contacts` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `name` VARCHAR(255) NOT NULL,
@@ -174,9 +152,7 @@ CREATE TABLE IF NOT EXISTS `contacts` (
     INDEX `idx_contacts_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: campaign_recipients
--- --------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS `campaign_recipients` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `campaign_id` INT NOT NULL,
@@ -191,9 +167,6 @@ CREATE TABLE IF NOT EXISTS `campaign_recipients` (
     CONSTRAINT `fk_cr_contact` FOREIGN KEY (`contact_id`) REFERENCES `contacts`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- --------------------------------------------------------
--- Table structure for table: email_events
--- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `email_events` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `campaignId` INT NOT NULL,

@@ -1,4 +1,4 @@
-﻿import { marked } from "marked";
+import { marked } from "marked";
 import { env } from "../config/env.js";
 
 marked.setOptions({
@@ -287,7 +287,6 @@ export function renderCampaignEmail({
       <td align="center" style="padding: 32px 16px;">
         <table border="0" cellpadding="0" cellspacing="0" width="600" class="email-container" role="presentation" style="max-width: 600px; width: 100%;">
 
-          <!-- BRAND / TOP ACCENT -->
           <tr>
             <td align="center" style="padding-bottom: 20px;">
               <table border="0" cellpadding="0" cellspacing="0" role="presentation">
@@ -301,17 +300,12 @@ export function renderCampaignEmail({
             </td>
           </tr>
 
-          <!-- MAIN CARD -->
           <tr>
             <td class="content-cell" style="background-color: #ffffff; border-radius: 16px; padding: 36px 40px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); border: 1px solid rgba(0, 0, 0, 0.05);">
-
-              <!-- EMAIL BODY CONTENT -->
               ${styledBody}
-
             </td>
           </tr>
 
-          <!-- FOOTER -->
           <tr>
             <td align="center" style="padding: 24px 16px; color: #9ca3af; font-size: 12px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
               <p style="margin: 0 0 6px 0;">
