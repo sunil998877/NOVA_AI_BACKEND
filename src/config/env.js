@@ -1,4 +1,4 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 dotenv.config();
 
 const parseOrigins = (value) => {
@@ -115,6 +115,8 @@ export const env = {
     youtubeApiKey: (process.env.YOUTUBE_API_KEY || "").trim(),
     instagramApiKey: (process.env.INSTAGRAM_API_KEY || process.env.RAPIDAPI_KEY || "").trim(),
     twitterBearerToken: (process.env.TWITTER_BEARER_TOKEN || "").trim(),
+    leadsApiKey: (process.env.LEADS_API_KEY || "ase-lead-key-nova-2026").trim(),
+    leadsApiUserId: (process.env.LEADS_API_USER_ID || "1").trim(),
 };
 
 if (env.nodeEnv === "production") {

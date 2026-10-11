@@ -22,6 +22,8 @@
     }
   }
 
+
+
   if (configuredPublicUrl && !configuredPublicUrl.includes("placeholder")) {
     return configuredPublicUrl;
   }

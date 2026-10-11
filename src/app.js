@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import cors from "cors";
 import JSON5 from "json5";
 import { env } from "./config/env.js";
@@ -14,7 +14,11 @@ import influencerRoutes from "./routes/influencer.routes.js";
 import contactRoutes from "./routes/contact.routes.js";
 import trackRoutes from "./routes/track.routes.js";
 import collaborationRoutes from "./routes/collaboration.routes.js";
+import leadRoutes from "./routes/lead.routes.js";
+import callbackRoutes from "./routes/callback.routes.js";
+import suppressionRoutes from "./routes/suppression.routes.js";
 import { handleN8nChatEvent } from "./controllers/Webhook/n8n-chat.controller.js";
+import { runAseIntegrationTests } from "./tests/ase_integration.test.js";
 
 export const app = express();
 
@@ -54,6 +58,9 @@ const parseJsonBody = (raw) => {
         return JSON5.parse(text);
     }
 };
+
+// CSV lead imports send file contents as JSON, so allow a larger body on that path only.
+app.use("/api/leads/import-csv", express.json({ limit: "6mb" }));
 
 app.use(
     express.json({
@@ -98,6 +105,16 @@ app.get("/api/health", (_req, res) => {
     res.status(200).json({ ok: true });
 });
 
+app.get("/api/engine/test", async (_req, res) => {
+    try {
+        const results = await runAseIntegrationTests();
+        const passed = results.filter((r) => r.passed).length;
+        res.status(200).json({ total: results.length, passed, results });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);
 app.use("/api/mails", mailRoutes);
@@ -111,6 +128,10 @@ app.use("/api/contacts", contactRoutes);
 app.use("/api/track", trackRoutes);
 app.use("/api/tracking", trackRoutes);
 app.use("/api/collab", collaborationRoutes);
+app.use("/api/leads", leadRoutes);
+app.use("/api/engine/leads", leadRoutes);
+app.use("/api/callbacks", callbackRoutes);
+app.use("/api/suppressions", suppressionRoutes);
 app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
 
 app.use((err, _req, res, _next) => {

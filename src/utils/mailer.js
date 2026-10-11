@@ -3,24 +3,24 @@ import { env } from "../config/env.js";
 import { deliverEmail } from "./deliveryChain.js";
 
 export async function sendMail({ to, subject, html, text, from, replyTo, headers }) {
-    const senderName = env.novaSenderName || "NOVA AI";
-    const senderEmail = env.smtp.user || env.novaSenderEmail || "nova@evokeaisolutions.com";
-    const effectiveFrom = from || env.smtp.from || `"${senderName}" <${senderEmail}>`;
+  const senderName = env.novaSenderName || "NOVA AI";
+  const senderEmail = env.smtp.user || env.novaSenderEmail || "nova@evokeaisolutions.com";
+  const effectiveFrom = from || env.smtp.from || `"${senderName}" <${senderEmail}>`;
 
-    return deliverEmail({
-        to,
-        subject,
-        html,
-        text,
-        from: effectiveFrom,
-        replyTo,
-        headers,
-    });
+  return deliverEmail({
+    to,
+    subject,
+    html,
+    text,
+    from: effectiveFrom,
+    replyTo,
+    headers,
+  });
 }
 
 export async function sendPasswordResetEmail({ to, resetUrl }) {
-    const subject = "Reset your NOVA password";
-    const html = `
+  const subject = "Reset your NOVA password";
+  const html = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -74,5 +74,5 @@ export async function sendPasswordResetEmail({ to, resetUrl }) {
 </body>
 </html>`;
 
-    return sendMail({ to, subject, html });
+  return sendMail({ to, subject, html });
 }

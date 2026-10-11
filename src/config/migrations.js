@@ -1,4 +1,4 @@
-﻿import { tableStatements } from "../schema/index.js";
+import { tableStatements } from "../schema/index.js";
 
 async function migrateCampaignCopyColumns(pool) {
     try {
@@ -363,6 +363,188 @@ async function migrateChatSchema(pool) {
     }
 }
 
+async function migrateAseFoundation(pool) {
+    try {
+        await pool.query(`
+            INSERT INTO organizations (id, name, slug, settings)
+            VALUES (1, 'Default Organization', 'default', '{}')
+            ON DUPLICATE KEY UPDATE name = name
+        `);
+    } catch (_) {}
+
+    try {
+        const [uCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'`
+        );
+        const existingUserCols = new Set(uCols.map((r) => r.COLUMN_NAME));
+
+        if (!existingUserCols.has("organization_id")) {
+            await pool.query("ALTER TABLE users ADD COLUMN organization_id INT NOT NULL DEFAULT 1");
+        }
+        if (!existingUserCols.has("role")) {
+            await pool.query("ALTER TABLE users ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'ORG_ADMIN'");
+        }
+    } catch (e) {
+        console.warn("User migration error:", e.message);
+    }
+
+    try {
+        const [lCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads'`
+        );
+        const existingLeadCols = new Set(lCols.map((r) => r.COLUMN_NAME));
+
+        const leadColDefs = [
+            ["organization_id", "INT NOT NULL DEFAULT 1"],
+            ["first_name", "VARCHAR(128) NULL"],
+            ["last_name", "VARCHAR(128) NULL"],
+            ["whatsapp_number", "VARCHAR(64) NULL"],
+            ["segment_attributes", "JSON NULL"],
+            ["priority", "INT NOT NULL DEFAULT 50"],
+            ["email_consent", "JSON NULL"],
+            ["voice_consent", "JSON NULL"],
+            ["whatsapp_consent", "JSON NULL"],
+            ["assigned_rep_id", "INT NULL"],
+            ["next_action", "VARCHAR(64) NULL"],
+            ["next_action_time", "DATETIME NULL"],
+            ["last_contacted_at", "DATETIME NULL"],
+            ["attempt_counters", "JSON NULL"],
+            ["callback_due", "DATETIME NULL"],
+            ["disposition", "VARCHAR(64) NULL"],
+            ["do_not_contact", "TINYINT(1) NOT NULL DEFAULT 0"],
+            ["health", "VARCHAR(16) NOT NULL DEFAULT 'GREEN'"],
+        ];
+
+        for (const [colName, colType] of leadColDefs) {
+            if (!existingLeadCols.has(colName)) {
+                try {
+                    await pool.query(`ALTER TABLE leads ADD COLUMN ${colName} ${colType}`);
+                } catch (err) {
+                    console.warn(`Could not add column ${colName} to leads:`, err.message);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("Lead migration error:", e.message);
+    }
+
+    try {
+        const [idxRows] = await pool.query(
+            `SELECT INDEX_NAME FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads'`
+        );
+        const existingIndexes = new Set(idxRows.map((r) => r.INDEX_NAME));
+
+        if (!existingIndexes.has("idx_leads_org")) {
+            try { await pool.query("CREATE INDEX idx_leads_org ON leads (organization_id)"); } catch (_) {}
+        }
+        if (!existingIndexes.has("idx_leads_org_status")) {
+            try { await pool.query("CREATE INDEX idx_leads_org_status ON leads (organization_id, status)"); } catch (_) {}
+        }
+        if (!existingIndexes.has("idx_leads_next_action")) {
+            try { await pool.query("CREATE INDEX idx_leads_next_action ON leads (organization_id, next_action_time)"); } catch (_) {}
+        }
+        if (!existingIndexes.has("idx_leads_priority")) {
+            try { await pool.query("CREATE INDEX idx_leads_priority ON leads (priority)"); } catch (_) {}
+        }
+    } catch (_) {}
+
+    try {
+        const [crmCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'crm_connections'`
+        );
+        const existingCrmCols = new Set(crmCols.map((r) => r.COLUMN_NAME));
+        if (crmCols.length > 0 && !existingCrmCols.has("organization_id")) {
+            await pool.query("ALTER TABLE crm_connections ADD COLUMN organization_id INT NOT NULL DEFAULT 1 AFTER id");
+            console.log("[Migration] Added column 'organization_id' to crm_connections table");
+        }
+    } catch (e) {
+        console.warn("CRM connection migration error:", e.message);
+    }
+
+    try {
+        const [cbCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'callbacks'`
+        );
+        const existingCbCols = new Set(cbCols.map((r) => r.COLUMN_NAME));
+        if (cbCols.length > 0 && !existingCbCols.has("organization_id")) {
+            await pool.query("ALTER TABLE callbacks ADD COLUMN organization_id INT NOT NULL DEFAULT 1 AFTER id");
+            console.log("[Migration] Added column 'organization_id' to callbacks table");
+        }
+    } catch (e) {
+        console.warn("Callbacks migration error:", e.message);
+    }
+
+    try {
+        const [supCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'suppressions'`
+        );
+        const existingSupCols = new Set(supCols.map((r) => r.COLUMN_NAME));
+        if (supCols.length > 0 && !existingSupCols.has("organization_id")) {
+            await pool.query("ALTER TABLE suppressions ADD COLUMN organization_id INT NOT NULL DEFAULT 1 AFTER id");
+            console.log("[Migration] Added column 'organization_id' to suppressions table");
+        }
+    } catch (e) {
+        console.warn("Suppressions migration error:", e.message);
+    }
+
+    try {
+        const [leCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'lead_events'`
+        );
+        const existingLeCols = new Set(leCols.map((r) => r.COLUMN_NAME));
+        if (leCols.length > 0 && !existingLeCols.has("organization_id")) {
+            await pool.query("ALTER TABLE lead_events ADD COLUMN organization_id INT NOT NULL DEFAULT 1 AFTER id");
+            console.log("[Migration] Added column 'organization_id' to lead_events table");
+        }
+    } catch (e) {
+        console.warn("Lead events migration error:", e.message);
+    }
+}
+
+
+async function syncUsersToLeads(pool) {
+    try {
+        const [users] = await pool.query("SELECT id, organization_id, full_name, organization, email FROM users");
+        for (const u of users) {
+            if (!u.email) continue;
+            const orgId = Number(u.organization_id || 1);
+            const [existing] = await pool.query(
+                "SELECT id FROM leads WHERE organization_id = ? AND LOWER(email) = LOWER(?)",
+                [orgId, u.email]
+            );
+            if (existing.length === 0) {
+                const nameParts = (u.full_name || "").trim().split(/\s+/);
+                const firstName = nameParts[0] || u.full_name || "User";
+                const lastName = nameParts.slice(1).join(" ") || "";
+                await pool.query(
+                    `INSERT INTO leads (organization_id, user_id, name, first_name, last_name, email, company, source, priority, status, health, metadata, attempt_counters, tags, segment_attributes)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'SIGNUP', 75, 'NEW', 'GREEN', ?, '{"email":0,"voice":0,"total":0}', '[]', '{}')`,
+                    [
+                        orgId,
+                        u.id,
+                        u.full_name || u.email,
+                        firstName,
+                        lastName,
+                        u.email.toLowerCase().trim(),
+                        u.organization || "Direct Signup",
+                        JSON.stringify({ registered_as_user: true, user_id: u.id }),
+                    ]
+                );
+                console.log(`[Migration] Synced user ${u.full_name} (${u.email}) as a lead in Lead Store`);
+            }
+        }
+    } catch (e) {
+        console.warn("[Migration] Error syncing users to leads:", e.message);
+    }
+}
+
 export async function runMigrations(pool) {
     for (const statement of tableStatements) {
         try {
@@ -383,5 +565,8 @@ export async function runMigrations(pool) {
         ensureCampaign50(pool),
         migrateCollaborationChatTables(pool),
         migrateChatSchema(pool),
+        migrateAseFoundation(pool),
+        syncUsersToLeads(pool),
     ]);
 }
+

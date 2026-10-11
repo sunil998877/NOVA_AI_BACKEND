@@ -1,8 +1,9 @@
-﻿import http from "http";
+import http from "http";
 import { env } from "./config/env.js";
 import { connectDb } from "./config/db.js";
 import { app } from "./app.js";
 import { initSocketServer } from "./socket/socketServer.js";
+import { aseScheduler } from "./services/ase/scheduler.service.js";
 
 const startServer = () => {
     const httpServer = http.createServer(app);
@@ -24,9 +25,13 @@ const startServer = () => {
         process.exit(1);
     });
 
-    connectDb().catch((err) => {
-        console.error("Initial database connection error:", err.message);
-    });
+    connectDb()
+        .then(() => {
+            aseScheduler.start();
+        })
+        .catch((err) => {
+            console.error("Initial database connection error:", err.message);
+        });
 };
 
 startServer();
