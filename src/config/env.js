@@ -112,11 +112,14 @@ export const env = {
     novaSenderEmail: (process.env.NOVA_SENDER_EMAIL || "nova@yourdomain.com").replace(/^["']|["']$/g, "").trim(),
     novaSenderName: (process.env.NOVA_SENDER_NAME || "NOVA AI").replace(/^["']|["']$/g, "").trim(),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
+    publicApiUrl: (process.env.PUBLIC_API_URL || "").replace(/\/$/, ""),
     youtubeApiKey: (process.env.YOUTUBE_API_KEY || "").trim(),
     instagramApiKey: (process.env.INSTAGRAM_API_KEY || process.env.RAPIDAPI_KEY || "").trim(),
     twitterBearerToken: (process.env.TWITTER_BEARER_TOKEN || "").trim(),
     leadsApiKey: (process.env.LEADS_API_KEY || "ase-lead-key-nova-2026").trim(),
     leadsApiUserId: (process.env.LEADS_API_USER_ID || "1").trim(),
+    leadsApiOrgId: Number(process.env.LEADS_API_ORG_ID || 1),
+    aseMlUrl: (process.env.ASE_ML_URL || "http://127.0.0.1:8091").trim(),
 };
 
 if (env.nodeEnv === "production") {
@@ -124,6 +127,8 @@ if (env.nodeEnv === "production") {
     if (!env.jwtSecret || env.jwtSecret.length < 32) missing.push("JWT_SECRET (minimum 32 characters)");
     if (!env.mysql.password) missing.push("MYSQL_PASSWORD");
     if (!process.env.ALLOWED_ORIGINS) missing.push("ALLOWED_ORIGINS");
+    if (!process.env.LEADS_API_KEY || env.leadsApiKey === "ase-lead-key-nova-2026") missing.push("LEADS_API_KEY");
+    if (!process.env.PUBLIC_API_URL) missing.push("PUBLIC_API_URL");
 
     if (missing.length > 0) {
         console.warn(`[env] Insecure or missing production configuration: ${missing.join(", ")}`);

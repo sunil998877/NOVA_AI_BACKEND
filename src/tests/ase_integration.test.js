@@ -3,6 +3,11 @@ import { parseCsv, csvToLeads, autoDetectMapping } from "../services/leads/csvPa
 import { OrchestratorService } from "../services/ase/orchestrator.service.js";
 import { normalizeChannelOutcome, ASE_OUTCOMES } from "../services/ase/outcomeNormalizer.service.js";
 import { validateDispatchEligibility } from "../services/ase/complianceGate.service.js";
+import { transitionLeadState, TERMINAL_STATES } from "../services/ase/leadStateMachine.js";
+import { eventBus } from "../services/ase/eventBus.service.js";
+import { plivoVoiceAdapter } from "../services/ase/adapters/plivoVoice.adapter.js";
+import { jobQueue } from "../services/ase/jobQueue.service.js";
+import { connectDb } from "../config/db.js";
 
 export async function runAseIntegrationTests() {
     const results = [];
@@ -16,6 +21,11 @@ export async function runAseIntegrationTests() {
     };
 
     try {
+        try {
+            await connectDb();
+        } catch (_) {}
+
+
         const lead = normalizeLead({
             email: "  Jane.Doe@AcmeEnterprise.com ",
             firstName: "Jane",
@@ -31,7 +41,7 @@ export async function runAseIntegrationTests() {
         assert("Normalization strips invalid characters from phone", lead.phone === "+15550194820");
         assert("Normalization parses priority score", lead.priority === 95);
         assert("Normalization parses tags into set array", Array.isArray(lead.tags) && lead.tags.includes("enterprise") && lead.tags.includes("vip"));
-        assert("Normalization records default channel consent", lead.email_consent?.status === "GRANTED" && lead.voice_consent?.status === "GRANTED");
+        assert("Normalization leaves consent unknown until it is explicitly granted", lead.email_consent?.status === "UNKNOWN" && lead.voice_consent?.status === "UNKNOWN");
 
         let missingEmailRejected = false;
         try {
@@ -83,13 +93,13 @@ export async function runAseIntegrationTests() {
             email: "contacted@corp.com",
             phone: "+15550192834",
             status: "CONTACTED",
-            attempt_counters: { email: 1, voice: 0, total: 1 },
+            attempt_counters: { email: 2, voice: 0, total: 2 },
             email_consent: { status: "GRANTED" },
             voice_consent: { status: "GRANTED" },
             do_not_contact: 0,
         };
         const contactedDecision = await OrchestratorService.evaluateNextAction(contactedLead);
-        assert("Orchestrator alternates to CALL after first EMAIL", contactedDecision.action === "CALL");
+        assert("Orchestrator alternates to CALL after email sequence", contactedDecision.action === "CALL");
 
         const exhaustedLead = {
             id: 103,
@@ -157,6 +167,39 @@ export async function runAseIntegrationTests() {
 
         const outcomeNegative = normalizeChannelOutcome("VOICE", { transcript: "Not interested thanks" });
         assert("Outcome normalizer detects negative objection", outcomeNegative === ASE_OUTCOMES.NOT_INTERESTED);
+
+        const t1 = transitionLeadState("NEW", "DISPATCH_EMAIL");
+        assert("XState transition: NEW + DISPATCH_EMAIL -> QUEUED", t1.nextState === "QUEUED" && t1.changed === true);
+
+        const t2 = transitionLeadState("QUEUED", "EMAIL_SENT");
+        assert("XState transition: QUEUED + EMAIL_SENT -> CONTACTED", t2.nextState === "CONTACTED" && t2.changed === true);
+
+        const t3 = transitionLeadState("CONTACTED", "INTEREST_DETECTED");
+        assert("XState transition: CONTACTED + INTEREST_DETECTED -> INTERESTED", t3.nextState === "INTERESTED" && t3.changed === true);
+
+        const t4 = transitionLeadState("INTERESTED", "CALLBACK_REQUESTED");
+        assert("XState transition: INTERESTED + CALLBACK_REQUESTED -> CALLBACK_SCHEDULED", t4.nextState === "CALLBACK_SCHEDULED" && t4.changed === true);
+
+        const t5 = transitionLeadState("CALLBACK_SCHEDULED", "SUPPRESS_DNC");
+        assert("XState transition: CALLBACK_SCHEDULED + SUPPRESS_DNC -> SUPPRESSED_DNC", t5.nextState === "SUPPRESSED_DNC" && t5.changed === true);
+
+        const t6 = transitionLeadState("SUPPRESSED_DNC", "DISPATCH_EMAIL");
+        assert("XState terminal guard: SUPPRESSED_DNC blocks outreach progression", t6.nextState === "SUPPRESSED_DNC" && t6.changed === false);
+
+        const envelope = eventBus.createEnvelope("LeadAccepted", { lead_id: 101, source: "API" });
+        assert("EventBus creates versioned envelope", envelope.version === "1.0" && envelope.event_type === "LeadAccepted" && Boolean(envelope.correlation_id));
+
+        const plivoXml = plivoVoiceAdapter.generateAnswerXml({ leadName: "Sarah" });
+        assert("Plivo Voice adapter generates valid Speak XML", plivoXml.includes("<Speak") && plivoXml.includes("Sarah"));
+
+        const plivoExtractedDnc = plivoVoiceAdapter.extractConversationOutcome("take me off your list and do not call");
+        assert("Plivo AI outcome extraction detects DNC request", plivoExtractedDnc.outcome === ASE_OUTCOMES.DNC && plivoExtractedDnc.isDnc === true);
+
+        const plivoExtractedCb = plivoVoiceAdapter.extractConversationOutcome("can you please call me back later today");
+        assert("Plivo AI outcome extraction detects Callback request", plivoExtractedCb.outcome === ASE_OUTCOMES.CALLBACK && plivoExtractedCb.callbackRequested === true);
+
+        const queueRes = await jobQueue.enqueueAction({ leadId: 101, action: "EMAIL", delayMs: 1000 });
+        assert("JobQueue enqueues delayed action", queueRes.enqueued === true && Boolean(queueRes.jobId));
 
         console.log(`[ASE Integration Tests] Total: ${results.length}, Passed: ${results.filter(r => r.passed).length}`);
     } catch (err) {

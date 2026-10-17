@@ -88,6 +88,42 @@ export const Callback = {
         return this.findById(orgId, id);
     },
 
+    async ensureHandoffQueue(orgId) {
+        const leads = await query(
+            `SELECT l.id, l.assigned_rep_id, l.callback_due, l.status
+             FROM leads l
+             WHERE l.organization_id = ?
+               AND l.do_not_contact = 0
+               AND l.status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
+               AND (
+                    l.status IN ('INTERESTED', 'CALLBACK_SCHEDULED', 'QUALIFIED')
+                    OR l.next_action = 'REP_CALLBACK'
+                    OR l.callback_due IS NOT NULL
+               )
+               AND NOT EXISTS (
+                    SELECT 1 FROM ${table} c
+                    WHERE c.organization_id = l.organization_id
+                      AND c.lead_id = l.id
+                      AND c.status IN ('OPEN', 'IN_PROGRESS', 'OVERDUE')
+               )`,
+            [Number(orgId)]
+        );
+
+        for (const lead of leads) {
+            const dueAt = lead.callback_due
+                ? new Date(lead.callback_due)
+                : new Date(Date.now() + 30 * 60 * 1000);
+            await this.create({
+                organization_id: orgId,
+                lead_id: lead.id,
+                assigned_rep_id: lead.assigned_rep_id,
+                due_at: dueAt,
+                status: dueAt.getTime() < Date.now() ? "OVERDUE" : "OPEN",
+                notes: "Human follow-up is waiting for this lead.",
+            });
+        }
+    },
+
     async countStats(orgId) {
         const rows = await query(
             `SELECT 

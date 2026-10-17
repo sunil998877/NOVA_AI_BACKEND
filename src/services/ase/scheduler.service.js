@@ -7,18 +7,21 @@ import { voiceAdapter } from "./adapters/voice.adapter.js";
 import { normalizeChannelOutcome } from "./outcomeNormalizer.service.js";
 import { OrchestratorService } from "./orchestrator.service.js";
 import { validateDispatchEligibility } from "./complianceGate.service.js";
+import { transitionLeadState } from "./leadStateMachine.js";
+import { eventBus } from "./eventBus.service.js";
 
 class AseScheduler {
     constructor() {
         this.isRunning = false;
         this.timer = null;
         this.pollIntervalMs = 15000;
+        this.cycleRunning = false;
+        this.pendingKick = false;
     }
 
     start() {
         if (this.isRunning) return;
         this.isRunning = true;
-        console.log("[ASE Scheduler] Started 24/7 background scheduler heartbeat");
         this.poll();
     }
 
@@ -28,20 +31,84 @@ class AseScheduler {
             clearTimeout(this.timer);
             this.timer = null;
         }
-        console.log("[ASE Scheduler] Stopped scheduler");
+    }
+
+    kick() {
+        if (!this.isRunning) return;
+        if (this.cycleRunning) {
+            this.pendingKick = true;
+            return;
+        }
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+        this.poll();
     }
 
     async poll() {
         if (!this.isRunning) return;
+        if (this.cycleRunning) {
+            this.pendingKick = true;
+            return;
+        }
+        this.cycleRunning = true;
+        this.pendingKick = false;
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
         try {
+            await this.autoQueueNewLeads();
             await this.executeDueActions();
             await this.checkOverdueCallbacks();
         } catch (error) {
             console.error("[ASE Scheduler] Error during cycle:", error.message);
         } finally {
-            if (this.isRunning) {
-                this.timer = setTimeout(() => this.poll(), this.pollIntervalMs);
+            this.cycleRunning = false;
+            if (!this.isRunning) return;
+            if (this.pendingKick) {
+                this.pendingKick = false;
+                setTimeout(() => this.poll(), 0);
+                return;
             }
+            this.timer = setTimeout(() => this.poll(), this.pollIntervalMs);
+        }
+    }
+
+    async autoQueueNewLeads() {
+        try {
+            const unscheduled = await Lead.findUnscheduledNew(10);
+            for (const lead of unscheduled) {
+                const orgId = Number(lead.organization_id || 1);
+                const decision = await OrchestratorService.evaluateNextAction(lead);
+                if (decision && decision.action) {
+                    const nextStatus = transitionLeadState(
+                        lead.status,
+                        decision.action === "EMAIL" ? "DISPATCH_EMAIL" : "DISPATCH_CALL"
+                    ).nextState || "QUEUED";
+
+                    await Lead.updateById(
+                        lead.id,
+                        {
+                            status: nextStatus,
+                            next_action: decision.action,
+                            next_action_time: decision.scheduledTime || new Date(),
+                        },
+                        orgId
+                    );
+
+                    await eventBus.publish("ActionScheduled", {
+                        organization_id: orgId,
+                        lead_id: lead.id,
+                        channel: decision.channel || "SYSTEM",
+                        action: decision.action,
+                        scheduled_time: decision.scheduledTime || new Date(),
+                    });
+                }
+            }
+        } catch (err) {
+            console.error("[ASE Scheduler] Failed autoQueueNewLeads:", err.message);
         }
     }
 
@@ -57,12 +124,18 @@ class AseScheduler {
     async processLeadAction(lead) {
         const orgId = Number(lead.organization_id || 1);
         const action = lead.next_action;
-        const timeStr = lead.next_action_time ? new Date(lead.next_action_time).toISOString() : new Date().toISOString();
-        const idempotencyKey = `exec_${orgId}_${lead.id}_${action}_${timeStr}`;
+        const freshLead = await Lead.findById(lead.id, orgId);
+
+        if (!freshLead || freshLead.do_not_contact || freshLead.next_action !== action) {
+            return;
+        }
+
+        const timeStr = freshLead.next_action_time ? new Date(freshLead.next_action_time).toISOString() : new Date().toISOString();
+        const idempotencyKey = `exec_${orgId}_${freshLead.id}_${action}_${timeStr}`;
 
         const claim = await AseExecution.claim({
             organization_id: orgId,
-            lead_id: lead.id,
+            lead_id: freshLead.id,
             idempotency_key: idempotencyKey,
             action_type: action,
         });
@@ -71,21 +144,20 @@ class AseScheduler {
             return;
         }
 
-        const eligibility = await validateDispatchEligibility(lead, action);
+        const eligibility = await validateDispatchEligibility(freshLead, action);
         if (!eligibility.eligible) {
             await AseExecution.complete(claim.executionId, "CANCELLED", { reason: eligibility.reason });
             await Lead.updateById(
-                lead.id,
+                freshLead.id,
                 { next_action: null, next_action_time: null },
                 orgId
             );
-            await LeadEvent.create({
+            await eventBus.publish("ActionFailed", {
                 organization_id: orgId,
-                lead_id: lead.id,
+                lead_id: freshLead.id,
                 channel: "SYSTEM",
-                event_type: "ACTION_BLOCKED_BY_COMPLIANCE",
-                status: "CANCELLED",
-                payload: { action, reason: eligibility.reason },
+                action,
+                reason: eligibility.reason,
             });
             return;
         }
@@ -94,26 +166,49 @@ class AseScheduler {
             let result;
             let channel;
 
+            await eventBus.publish("ActionDispatched", {
+                organization_id: orgId,
+                lead_id: freshLead.id,
+                channel: action === "EMAIL" ? "EMAIL" : "VOICE",
+                action,
+                execution_id: claim.executionId,
+            });
+
             if (action === "EMAIL") {
                 channel = "EMAIL";
-                result = await emailAdapter.execute(lead, "SEND");
+                result = await emailAdapter.execute(freshLead, "SEND");
             } else if (action === "CALL") {
                 channel = "VOICE";
-                result = await voiceAdapter.execute(lead, "CALL");
+                result = await voiceAdapter.execute(freshLead, "CALL");
             } else {
                 await AseExecution.complete(claim.executionId, "CANCELLED", { reason: `Unknown action ${action}` });
                 return;
             }
 
-            const currentCounters = lead.attempt_counters || { email: 0, voice: 0, total: 0 };
+            if (result.status !== "SUCCEEDED") {
+                await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
+                await eventBus.publish("ActionFailed", {
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    channel,
+                    action,
+                    status: result.status,
+                    metadata: result.metadata || { error: result.error },
+                });
+                return;
+            }
+
+            const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
             if (channel === "EMAIL") currentCounters.email = (currentCounters.email || 0) + 1;
             if (channel === "VOICE") currentCounters.voice = (currentCounters.voice || 0) + 1;
             currentCounters.total = (currentCounters.total || 0) + 1;
 
-            const nextStatus = lead.status === "NEW" || lead.status === "QUEUED" ? "CONTACTED" : lead.status;
+            const transitionEvent = channel === "EMAIL" ? "EMAIL_SENT" : "CALL_INITIATED";
+            const stateTransition = transitionLeadState(freshLead.status, transitionEvent);
+            const nextStatus = stateTransition.nextState;
 
             await Lead.updateById(
-                lead.id,
+                freshLead.id,
                 {
                     status: nextStatus,
                     attempt_counters: currentCounters,
@@ -123,33 +218,42 @@ class AseScheduler {
                 orgId
             );
 
-            await LeadEvent.create({
+            await eventBus.publish("ActionCompleted", {
                 organization_id: orgId,
-                lead_id: lead.id,
+                lead_id: freshLead.id,
                 channel,
-                event_type: result.status === "SUCCEEDED" ? `${channel}_SENT` : `${channel}_FAILED`,
+                action,
                 status: result.status,
-                payload: result.metadata || { error: result.error },
+                metadata: result.metadata || { error: result.error },
             });
+
+            if (stateTransition.changed) {
+                await eventBus.publish("LeadStateChanged", {
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    channel,
+                    from_state: freshLead.status,
+                    to_state: nextStatus,
+                });
+            }
 
             const outcome = normalizeChannelOutcome(channel, result.rawResponse);
             await OrchestratorService.handleOutcomeEvent(
-                { ...lead, status: nextStatus, attempt_counters: currentCounters },
+                { ...freshLead, status: nextStatus, attempt_counters: currentCounters },
                 outcome,
                 { channel, ...result.metadata }
             );
 
             await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
         } catch (err) {
-            console.error(`[ASE Scheduler] Failed executing ${action} on lead ${lead.id}:`, err.message);
+            console.error(`[ASE Scheduler] Failed executing ${action} on lead ${freshLead.id}:`, err.message);
             await AseExecution.complete(claim.executionId, "FAILED", { error: err.message });
-            await LeadEvent.create({
+            await eventBus.publish("ActionFailed", {
                 organization_id: orgId,
-                lead_id: lead.id,
+                lead_id: freshLead.id,
                 channel: "SYSTEM",
-                event_type: "ACTION_FAILED",
-                status: "FAILED",
-                payload: { action, error: err.message },
+                action,
+                error: err.message,
             });
         }
     }
@@ -161,17 +265,17 @@ class AseScheduler {
                 if (cb.status === "OPEN") {
                     await Callback.updateById(cb.organization_id || 1, cb.id, { status: "OVERDUE" });
                     await Lead.updateById(cb.lead_id, { health: "RED" }, cb.organization_id || 1);
-                    await LeadEvent.create({
+                    await eventBus.publish("CallbackCompleted", {
                         organization_id: cb.organization_id || 1,
                         lead_id: cb.lead_id,
                         channel: "SYSTEM",
-                        event_type: "CALLBACK_OVERDUE",
                         status: "OVERDUE",
-                        payload: { callbackId: cb.id, dueAt: cb.due_at },
+                        callback_id: cb.id,
+                        due_at: cb.due_at,
                     });
                 }
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 }
 

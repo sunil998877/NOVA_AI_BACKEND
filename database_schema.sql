@@ -185,43 +185,5 @@ CREATE TABLE IF NOT EXISTS `email_events` (
     CONSTRAINT `fk_ee_recipient` FOREIGN KEY (`recipientId`) REFERENCES `mails`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS `voice_calls` (
-    `id` INT AUTO_INCREMENT PRIMARY KEY,
-    `call_id` VARCHAR(128) NOT NULL UNIQUE,
-    `organization_id` INT NOT NULL DEFAULT 1,
-    `lead_id` INT NULL,
-    `provider` VARCHAR(64) NOT NULL DEFAULT 'telephony',
-    `provider_call_id` VARCHAR(128) NULL,
-    `direction` ENUM('outbound', 'inbound', 'browser_test') NOT NULL DEFAULT 'outbound',
-    `from_number` VARCHAR(64) NULL,
-    `to_number` VARCHAR(64) NULL,
-    `status` VARCHAR(64) NOT NULL DEFAULT 'queued',
-    `disposition` VARCHAR(64) NULL,
-    `interest_level` VARCHAR(64) NULL,
-    `business_need` TEXT NULL,
-    `objections` TEXT NULL,
-    `callback_requested` TINYINT(1) NOT NULL DEFAULT 0,
-    `callback_time` DATETIME NULL,
-    `dnc_requested` TINYINT(1) NOT NULL DEFAULT 0,
-    `wrong_person` TINYINT(1) NOT NULL DEFAULT 0,
-    `handoff_required` TINYINT(1) NOT NULL DEFAULT 0,
-    `handoff_status` VARCHAR(64) NULL,
-    `summary` TEXT NULL,
-    `transcript` MEDIUMTEXT NULL,
-    `extracted_data` JSON NULL,
-    `duration_seconds` INT NOT NULL DEFAULT 0,
-    `started_at` DATETIME NULL,
-    `ended_at` DATETIME NULL,
-    `error_category` VARCHAR(128) NULL,
-    `error_details` TEXT NULL,
-    `idempotency_key` VARCHAR(255) NULL UNIQUE,
-    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX `idx_vc_org_status` (`organization_id`, `status`),
-    INDEX `idx_vc_lead` (`organization_id`, `lead_id`),
-    INDEX `idx_vc_provider_call` (`provider_call_id`),
-    INDEX `idx_vc_created` (`created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 SET FOREIGN_KEY_CHECKS = 1;
 

@@ -9,6 +9,8 @@ export const listCallbacks = asyncHandler(async (req, res) => {
     const p = Math.max(Number(page) || 1, 1);
     const l = Math.min(Math.max(Number(limit) || 50, 1), 200);
 
+    await Callback.ensureHandoffQueue(orgId);
+
     const items = await Callback.list(orgId, {
         status: status ? String(status) : "",
         assigned_rep_id: assigned_rep_id ? Number(assigned_rep_id) : null,

@@ -4,6 +4,11 @@ import { LeadEvent } from "../../models/lead-event.model.js";
 import { Callback } from "../../models/callback.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { env } from "../../config/env.js";
+import { describeLeadApiKey, publicApiBase, rotateLeadApiKey, maskApiKey } from "../../services/leads/leadApiCredential.service.js";
+import { MAX_BATCH } from "../../services/leads/leadIntake.service.js";
+import { aseScheduler } from "../../services/ase/scheduler.service.js";
+import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
+import { query } from "../../config/db.js";
 
 const TERMINAL_STATES = new Set(["CLOSED_WON", "CLOSED_LOST", "CLOSED_UNQUALIFIED", "SUPPRESSED_DNC"]);
 
@@ -107,14 +112,94 @@ export const deleteLead = asyncHandler(async (req, res) => {
 });
 
 export const getApiCaptureConfig = asyncHandler(async (req, res) => {
+    const credential = await describeLeadApiKey();
+    const organizationId = Number(req.user.organization_id || credential.organizationId || 1);
+    if (credential.organizationId !== organizationId) {
+        return res.status(403).json({ error: "Lead API credentials belong to a different organization" });
+    }
     return res.status(200).json({
         data: {
-            apiKey: env.leadsApiKey || "ase-lead-key-nova-2026",
+            apiKey: credential.apiKey,
+            apiKeyPrefix: credential.apiKeyPrefix,
+            apiKeyMasked: credential.apiKeyMasked,
+            apiKeyConfigured: credential.apiKeyConfigured,
+            keyStoredAsHash: credential.keyStoredAsHash,
+            rotatedAt: credential.rotatedAt,
             endpoint: "/api/leads",
             webhookEndpoint: "/api/leads/webhook",
-            engineWebhookEndpoint: "/api/engine/leads/webhook",
-            organizationId: Number(req.user.organization_id || 1),
+            publicBaseUrl: publicApiBase(req),
+            deployedBaseUrl: env.publicApiUrl || null,
+            organizationId,
+            maxBatch: MAX_BATCH,
+            authHeader: "x-api-key",
+            devProxy: "The Vite dev server proxies /api to the backend. External webhook senders must use publicBaseUrl.",
         },
     });
+});
+
+export const rotateApiCaptureKey = asyncHandler(async (req, res) => {
+    const credential = await describeLeadApiKey();
+    const organizationId = Number(req.user.organization_id || 0);
+    if (!organizationId || credential.organizationId !== organizationId) {
+        return res.status(403).json({ error: "Only the API key organization can rotate this key" });
+    }
+    const rotated = await rotateLeadApiKey();
+    return res.status(200).json({
+        data: {
+            apiKey: rotated.apiKey,
+            apiKeyPrefix: rotated.apiKeyPrefix,
+            apiKeyMasked: rotated.apiKeyMasked || maskApiKey(rotated.apiKey),
+            rotatedAt: rotated.rotatedAt,
+            organizationId: rotated.organizationId,
+        },
+    });
+});
+
+export const executeLeadAction = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    let lead = await Lead.findById(req.params.id, orgId);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+    if (lead.do_not_contact) return res.status(400).json({ error: "Lead is suppressed (Do Not Contact)" });
+    if (TERMINAL_STATES.has(lead.status)) return res.status(400).json({ error: "Lead is in a terminal state" });
+
+    if (!lead.next_action) {
+        const decision = await OrchestratorService.evaluateNextAction(lead);
+        let action = decision?.action;
+        if (!action) {
+            const counters = typeof lead.attempt_counters === "string"
+                ? JSON.parse(lead.attempt_counters || "{}")
+                : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
+            if (counters.email === 0 && lead.email && lead.email_consent?.status !== "DENIED") {
+                action = "EMAIL";
+            } else if (lead.phone && counters.voice < 2 && lead.voice_consent?.status !== "DENIED") {
+                action = "CALL";
+            } else if (lead.email && counters.email < 3 && lead.email_consent?.status !== "DENIED") {
+                action = "EMAIL";
+            }
+        }
+        if (!action) {
+            return res.status(400).json({ error: decision?.reason || "No eligible action to execute" });
+        }
+        lead = await Lead.updateById(lead.id, {
+            next_action: action,
+            next_action_time: new Date(),
+        }, orgId);
+    }
+
+    await aseScheduler.processLeadAction(lead);
+    const updated = await Lead.findById(lead.id, orgId);
+    return res.status(200).json({ data: { lead: updated, executed: true } });
+});
+
+export const listTeamReps = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    const rows = await query(
+        `SELECT id, fullName, email, role 
+         FROM users 
+         WHERE organization_id = ? OR organization_id IS NULL
+         ORDER BY (role = 'SALESPERSON' OR role = 'SALES_MANAGER') DESC, fullName ASC`,
+        [orgId]
+    );
+    return res.status(200).json({ data: rows });
 });
 

@@ -46,10 +46,14 @@ const serialize = (key, value) => {
 
 export const Lead = {
     async findById(id, orgId = null) {
-        let sql = `SELECT ${columns} FROM ${table} WHERE id = ?`;
+        const selected = columns.split(",").map((column) => `l.${column.trim()}`).join(", ");
+        let sql = `SELECT ${selected}, u.fullName AS assigned_rep_name
+             FROM ${table} l
+             LEFT JOIN users u ON u.id = l.assigned_rep_id
+             WHERE l.id = ?`;
         const params = [id];
         if (orgId) {
-            sql += ` AND organization_id = ?`;
+            sql += ` AND l.organization_id = ?`;
             params.push(orgId);
         }
         sql += ` LIMIT 1`;
@@ -98,38 +102,42 @@ export const Lead = {
     async list(orgId, { q = "", source = "", status = "", priority = null, assigned_rep_id = null, skip = 0, limit = 50 } = {}) {
         const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
         const safeSkip = Math.max(Number(skip) || 0, 0);
-        const where = ["organization_id = ?"];
+        const where = ["l.organization_id = ?"];
         const params = [orgId];
 
         if (source) {
-            where.push("source = ?");
+            where.push("l.source = ?");
             params.push(source);
         }
         if (status) {
-            where.push("status = ?");
+            where.push("l.status = ?");
             params.push(status);
         }
         if (priority !== null && priority !== undefined) {
-            where.push("priority = ?");
+            where.push("l.priority = ?");
             params.push(Number(priority));
         }
         if (assigned_rep_id) {
-            where.push("assigned_rep_id = ?");
+            where.push("l.assigned_rep_id = ?");
             params.push(Number(assigned_rep_id));
         }
         if (q && q.trim()) {
             const like = `%${q.trim()}%`;
-            where.push("(name LIKE ? OR email LIKE ? OR company LIKE ? OR phone LIKE ?)");
+            where.push("(l.name LIKE ? OR l.email LIKE ? OR l.company LIKE ? OR l.phone LIKE ?)");
             params.push(like, like, like, like);
         }
 
         const whereSql = where.join(" AND ");
+        const selected = columns.split(",").map((column) => `l.${column.trim()}`).join(", ");
         const rows = await query(
-            `SELECT ${columns} FROM ${table} WHERE ${whereSql}
-             ORDER BY priority DESC, created_at DESC LIMIT ${safeLimit} OFFSET ${safeSkip}`,
+            `SELECT ${selected}, u.fullName AS assigned_rep_name
+             FROM ${table} l
+             LEFT JOIN users u ON u.id = l.assigned_rep_id
+             WHERE ${whereSql}
+             ORDER BY l.priority DESC, l.created_at DESC LIMIT ${safeLimit} OFFSET ${safeSkip}`,
             params
         );
-        const countRows = await query(`SELECT COUNT(*) AS total FROM ${table} WHERE ${whereSql}`, params);
+        const countRows = await query(`SELECT COUNT(*) AS total FROM ${table} l WHERE ${whereSql}`, params);
         return { items: rows.map(toLead), total: Number(countRows[0]?.total || 0) };
     },
 
@@ -149,19 +157,33 @@ export const Lead = {
         return Object.fromEntries(rows.map((r) => [r.source, Number(r.total)]));
     },
 
-    async findDueForAction(limit = 20) {
+    async findDueForAction(limit = 20, now = new Date()) {
         const rows = await query(
             `SELECT ${columns} FROM ${table}
              WHERE next_action_time IS NOT NULL 
-               AND next_action_time <= NOW()
+               AND next_action_time <= ?
                AND do_not_contact = 0
                AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
              ORDER BY priority DESC, next_action_time ASC
              LIMIT ?`,
-            [Number(limit) || 20]
+            [now, Number(limit) || 20]
         );
         return rows.map(toLead);
     },
+
+    async findUnscheduledNew(limit = 10) {
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE (status = 'NEW' OR (status = 'QUEUED' AND next_action_time IS NULL))
+               AND do_not_contact = 0
+               AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
+             ORDER BY priority DESC, created_at ASC
+             LIMIT ?`,
+            [Number(limit) || 10]
+        );
+        return rows.map(toLead);
+    },
+
 
     async create(data) {
         const orgId = Number(data.organization_id || data.organizationId || 1);
@@ -173,8 +195,8 @@ export const Lead = {
                 segment_attributes, priority, status, email_consent, voice_consent,
                 whatsapp_consent, assigned_rep_id, next_action, next_action_time,
                 last_contacted_at, attempt_counters, callback_due, disposition,
-                do_not_contact, health, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                do_not_contact, health, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 orgId,
                 data.userId ?? data.user_id ?? null,
@@ -194,7 +216,7 @@ export const Lead = {
                 serialize("email_consent", data.email_consent || null),
                 serialize("voice_consent", data.voice_consent || null),
                 serialize("whatsapp_consent", data.whatsapp_consent || null),
-                data.assigned_rep_id ?? null,
+                data.assigned_rep_id ? Number(data.assigned_rep_id) : null,
                 data.next_action ?? null,
                 data.next_action_time ?? null,
                 data.last_contacted_at ?? null,
@@ -204,6 +226,7 @@ export const Lead = {
                 data.do_not_contact ? 1 : 0,
                 data.health || "GREEN",
                 serialize("metadata", data.metadata || {}),
+                data.created_at ? new Date(data.created_at) : new Date(),
             ]
         );
         return this.findById(result.insertId, orgId);

@@ -57,7 +57,7 @@ export async function validateDispatchEligibility(lead, action) {
             return { eligible: false, reason: "Lead has no email address" };
         }
         if (lead.email_consent?.status === "DENIED") {
-            return { eligible: false, reason: "Email consent denied" };
+            return { eligible: false, reason: "Email consent has been denied" };
         }
         if (Number(counters.email || 0) >= MAX_EMAILS) {
             return { eligible: false, reason: "Maximum email fatigue limit reached" };
@@ -69,7 +69,7 @@ export async function validateDispatchEligibility(lead, action) {
             return { eligible: false, reason: "Lead has no phone number" };
         }
         if (lead.voice_consent?.status === "DENIED") {
-            return { eligible: false, reason: "Voice consent denied" };
+            return { eligible: false, reason: "Voice consent has been denied" };
         }
         if (Number(counters.voice || 0) >= MAX_CALLS) {
             return { eligible: false, reason: "Maximum call fatigue limit reached" };

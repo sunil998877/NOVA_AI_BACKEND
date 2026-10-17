@@ -1,4 +1,4 @@
-﻿
+
 import { env } from "../config/env.js";
 import { sendViaSMTP } from "./smtp.js";
 import { sendSingleViaN8n, callN8nWebhook } from "./n8n.js";
@@ -9,6 +9,9 @@ import { Campaign } from "../models/campaign.model.js";
 import { audit } from "./audit.js";
 
 export async function deliverEmail({ to, subject, html, text, from, replyTo, headers }) {
+    if (process.env.EMAIL_DELIVERY_MODE === "smtp") {
+        return sendViaSMTP({ to, subject, html, text, from, replyTo, headers });
+    }
 
     if (env.n8nWebhookUrl) {
         try {
@@ -21,6 +24,7 @@ export async function deliverEmail({ to, subject, html, text, from, replyTo, hea
             console.warn(`[Delivery] n8n primary failed for ${to}:`, err.message);
         }
     }
+
 
     try {
         const result = await sendViaSMTP({ to, subject, html, text, from, replyTo, headers });

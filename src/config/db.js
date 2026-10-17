@@ -21,6 +21,13 @@ export const execute = async (sql, params = []) => {
     return result;
 };
 
+export const closeDb = async () => {
+    if (!pool) return;
+    const current = pool;
+    pool = null;
+    await current.end();
+};
+
 export const connectDb = async () => {
     const { host, port, user, password, database } = env.mysql;
 

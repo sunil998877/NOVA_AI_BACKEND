@@ -47,7 +47,6 @@ export const signup = asyncHandler(async (req, res) => {
         authProvider: "local",
     });
 
-    // Auto-capture new signup as a Lead in Lead Store / ASE Pipeline
     try {
         const orgId = Number(user.organization_id || 1);
         const nameParts = (fullName || "").trim().split(/\s+/);

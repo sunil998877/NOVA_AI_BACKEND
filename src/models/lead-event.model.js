@@ -22,10 +22,10 @@ const toEvent = (row) => {
 };
 
 export const LeadEvent = {
-    async create({ organization_id, lead_id, user_id = null, channel = "SYSTEM", event_type, status = null, payload = null }) {
+    async create({ organization_id, lead_id, user_id = null, channel = "SYSTEM", event_type, status = null, payload = null, created_at = new Date() }) {
         const result = await execute(
-            `INSERT INTO ${table} (organization_id, lead_id, user_id, channel, event_type, status, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${table} (organization_id, lead_id, user_id, channel, event_type, status, payload, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 Number(organization_id),
                 Number(lead_id),
@@ -34,6 +34,7 @@ export const LeadEvent = {
                 event_type,
                 status,
                 payload ? JSON.stringify(payload) : null,
+                created_at,
             ]
         );
         const rows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [result.insertId]);

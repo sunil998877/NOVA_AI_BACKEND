@@ -1,4 +1,5 @@
 import { BaseChannelAdapter } from "./base.adapter.js";
+import { plivoVoiceAdapter } from "./plivoVoice.adapter.js";
 
 export class CallingBotVoiceAdapter extends BaseChannelAdapter {
     constructor() {
@@ -6,24 +7,9 @@ export class CallingBotVoiceAdapter extends BaseChannelAdapter {
     }
 
     async execute(lead, action, payload = {}) {
-        if (!lead || !lead.phone) {
-            return {
-                channel: "VOICE",
-                status: "FAILED",
-                error: "Lead has no phone number",
-                rawResponse: null,
-            };
-        }
-
-        return {
-            channel: "VOICE",
-            status: "SUCCEEDED",
-            rawResponse: { simulated: true },
-            metadata: {
-                phone: lead.phone,
-            },
-        };
+        return plivoVoiceAdapter.execute(lead, action, payload);
     }
 }
 
 export const voiceAdapter = new CallingBotVoiceAdapter();
+

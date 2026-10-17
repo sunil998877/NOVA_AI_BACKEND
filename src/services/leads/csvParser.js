@@ -1,7 +1,3 @@
-/**
- * Minimal RFC-4180 CSV parser (handles quoted fields, escaped quotes,
- * commas/newlines inside quotes, CRLF, BOM). No external dependency.
- */
 export function parseCsv(text, customDelimiter = null) {
     const input = String(text || "").replace(/^\uFEFF/, "");
     let delimiter = customDelimiter;
@@ -89,11 +85,6 @@ export function autoDetectMapping(headers) {
     return mapping;
 }
 
-/**
- * Turns CSV text into raw lead objects.
- * @param {string} text CSV content
- * @param {Record<string, string>} [columnMap] optional { field: "CSV Header" } override from the UI
- */
 export function csvToLeads(text, columnMap = {}) {
     const rows = parseCsv(text);
     if (rows.length < 2) return { headers: rows[0] || [], leads: [] };
@@ -101,7 +92,6 @@ export function csvToLeads(text, columnMap = {}) {
     const headers = rows[0].map((h) => String(h).trim());
     const mapping = autoDetectMapping(headers);
 
-    // Support both { [field]: "Header Name" } and { ["Header Name"]: "field" }
     for (const [key, val] of Object.entries(columnMap || {})) {
         if (!key || !val || val === "ignore") {
             if (val === "ignore") {
@@ -112,13 +102,11 @@ export function csvToLeads(text, columnMap = {}) {
             }
             continue;
         }
-        // Case 1: key is field (e.g. 'email'), val is header (e.g. 'Work Email')
         const idxByVal = headers.findIndex((h) => h.toLowerCase() === String(val).trim().toLowerCase());
         if (idxByVal >= 0 && HEADER_ALIASES[key]) {
             mapping[key] = idxByVal;
             continue;
         }
-        // Case 2: key is header (e.g. 'Work Email'), val is field (e.g. 'email')
         const idxByKey = headers.findIndex((h) => h.toLowerCase() === String(key).trim().toLowerCase());
         if (idxByKey >= 0 && HEADER_ALIASES[val]) {
             mapping[val] = idxByKey;

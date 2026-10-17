@@ -27,7 +27,7 @@ export async function runAseTests() {
         assert("Normalization sets full name", lead.name === "Alex Smith");
         assert("Normalization cleans phone numbers", lead.phone === "+15550192834");
         assert("Normalization assigns custom priority", lead.priority === 85);
-        assert("Normalization sets default consents", lead.email_consent?.status === "GRANTED");
+        assert("Normalization leaves email consent unknown until it is explicitly granted", lead.email_consent?.status === "UNKNOWN");
 
         let thrown = false;
         try {

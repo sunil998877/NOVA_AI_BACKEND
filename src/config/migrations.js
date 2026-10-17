@@ -449,6 +449,24 @@ async function migrateAseFoundation(pool) {
         if (!existingIndexes.has("idx_leads_priority")) {
             try { await pool.query("CREATE INDEX idx_leads_priority ON leads (priority)"); } catch (_) {}
         }
+        try {
+            await pool.query(
+                `UPDATE leads l
+                 LEFT JOIN users u ON l.assigned_rep_id = u.id
+                 SET l.assigned_rep_id = NULL
+                 WHERE (u.email IS NOT NULL AND LOWER(l.email) = LOWER(u.email))
+                    OR (l.source = 'SIGNUP' AND l.assigned_rep_id = l.user_id)`
+            );
+        } catch (error) {
+            console.warn("Could not clean up self-assigned lead reps:", error.message);
+        }
+        if (!existingIndexes.has("uq_leads_org_phone")) {
+            try {
+                await pool.query("CREATE UNIQUE INDEX uq_leads_org_phone ON leads (organization_id, phone)");
+            } catch (error) {
+                console.warn("Could not add unique lead phone index:", error.message);
+            }
+        }
     } catch (_) {}
 
     try {
@@ -511,7 +529,7 @@ async function migrateAseFoundation(pool) {
 
 async function syncUsersToLeads(pool) {
     try {
-        const [users] = await pool.query("SELECT id, organization_id, full_name, organization, email FROM users");
+        const [users] = await pool.query("SELECT id, organization_id, fullName, organization, email FROM users");
         for (const u of users) {
             if (!u.email) continue;
             const orgId = Number(u.organization_id || 1);
@@ -520,8 +538,8 @@ async function syncUsersToLeads(pool) {
                 [orgId, u.email]
             );
             if (existing.length === 0) {
-                const nameParts = (u.full_name || "").trim().split(/\s+/);
-                const firstName = nameParts[0] || u.full_name || "User";
+                const nameParts = (u.fullName || "").trim().split(/\s+/);
+                const firstName = nameParts[0] || u.fullName || "User";
                 const lastName = nameParts.slice(1).join(" ") || "";
                 await pool.query(
                     `INSERT INTO leads (organization_id, user_id, name, first_name, last_name, email, company, source, priority, status, health, metadata, attempt_counters, tags, segment_attributes)
@@ -529,7 +547,7 @@ async function syncUsersToLeads(pool) {
                     [
                         orgId,
                         u.id,
-                        u.full_name || u.email,
+                        u.fullName || u.email,
                         firstName,
                         lastName,
                         u.email.toLowerCase().trim(),
@@ -537,7 +555,7 @@ async function syncUsersToLeads(pool) {
                         JSON.stringify({ registered_as_user: true, user_id: u.id }),
                     ]
                 );
-                console.log(`[Migration] Synced user ${u.full_name} (${u.email}) as a lead in Lead Store`);
+                console.log(`[Migration] Synced user ${u.fullName} (${u.email}) as a lead in Lead Store`);
             }
         }
     } catch (e) {

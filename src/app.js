@@ -17,8 +17,10 @@ import collaborationRoutes from "./routes/collaboration.routes.js";
 import leadRoutes from "./routes/lead.routes.js";
 import callbackRoutes from "./routes/callback.routes.js";
 import suppressionRoutes from "./routes/suppression.routes.js";
+import aseVoiceRoutes from "./routes/ase-voice.routes.js";
 import { handleN8nChatEvent } from "./controllers/Webhook/n8n-chat.controller.js";
 import { runAseIntegrationTests } from "./tests/ase_integration.test.js";
+import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
 
 export const app = express();
 
@@ -45,7 +47,15 @@ app.use(
         },
         credentials: true,
         methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "X-Frontend-Url"],
+        allowedHeaders: [
+            "Content-Type",
+            "Authorization",
+            "X-Requested-With",
+            "Accept",
+            "X-Frontend-Url",
+            "x-api-key",
+            "x-organization-id",
+        ],
     })
 );
 
@@ -59,7 +69,6 @@ const parseJsonBody = (raw) => {
     }
 };
 
-// CSV lead imports send file contents as JSON, so allow a larger body on that path only.
 app.use("/api/leads/import-csv", express.json({ limit: "6mb" }));
 
 app.use(
@@ -132,7 +141,44 @@ app.use("/api/leads", leadRoutes);
 app.use("/api/engine/leads", leadRoutes);
 app.use("/api/callbacks", callbackRoutes);
 app.use("/api/suppressions", suppressionRoutes);
+app.use("/api/engine/voice", aseVoiceRoutes);
 app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
+
+app.all("/api/engine/check-email-replies", async (_req, res) => {
+    try {
+        const result = await emailReplyListener.pollInbox();
+        res.status(200).json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/api/engine/inbound-email", async (req, res) => {
+    try {
+        const payload = req.body || {};
+        const from = payload.from || payload.sender || payload.from_email || payload.envelope?.from || "";
+        const subject = payload.subject || "";
+        const body = payload.body || payload.text || payload.html || payload.message || payload.reply || "";
+        const messageId = payload.messageId || payload["message-id"] || `webhook_${Date.now()}`;
+        const date = payload.date ? new Date(payload.date) : new Date();
+
+        const result = await emailReplyListener.handleIncomingReply({
+            from,
+            subject,
+            body,
+            rawText: body,
+            messageId,
+            date,
+        });
+
+        if (!result) {
+            return res.status(200).json({ ok: false, message: "Lead not found for sender" });
+        }
+        res.status(200).json({ ok: true, result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 app.use((err, _req, res, _next) => {
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) {

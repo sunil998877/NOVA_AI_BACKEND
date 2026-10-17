@@ -13,7 +13,6 @@ export function runLayer1Tests() {
     };
 
     try {
-        // --- 1. CSV & Delimiter Parsing Tests ---
         const standardCsv = `Email,Name,Company\nalice@example.com,Alice Walker,Acme Corp\nbob@example.com,Bob Stone,Beta LLC`;
         const parsedStandard = parseCsv(standardCsv);
         assert("Standard comma CSV parsed correctly", parsedStandard.length === 3 && parsedStandard[1][0] === "alice@example.com");
@@ -30,7 +29,6 @@ export function runLayer1Tests() {
         const parsedQuoted = parseCsv(quotedCsv);
         assert("Quoted CSV with commas inside quotes handled", parsedQuoted.length === 2 && parsedQuoted[1][1] === "Doe, John" && parsedQuoted[1][2] === "CEO, VP");
 
-        // --- 2. Auto-Detect Column Mapping Tests ---
         const headers = ["Work Email", "Contact Name", "Company Name", "Mobile", "Lead Priority", "Tags"];
         const mapping = autoDetectMapping(headers);
         assert("Auto-detect mapping found email column", mapping.email === 0);
@@ -40,12 +38,10 @@ export function runLayer1Tests() {
         assert("Auto-detect mapping found priority column", mapping.priority === 4);
         assert("Auto-detect mapping found tags column", mapping.tags === 5);
 
-        // --- 3. CSV To Leads Conversion ---
         const sampleCsv = `Work Email,Contact Name,Mobile\njohn.doe@techcorp.com,John Doe,+1 (555) 234-5678`;
         const converted = csvToLeads(sampleCsv);
         assert("csvToLeads extracted lead rows with mapping", converted.leads.length === 1 && converted.leads[0].email === "john.doe@techcorp.com");
 
-        // --- 4. Lead Normalization Tests ---
         const normalized = normalizeLead({
             email: "  MARK.SPENCER@RETAIL.COM  ",
             firstName: "Mark",
@@ -60,9 +56,8 @@ export function runLayer1Tests() {
         assert("Normalization cleans phone preserving +", normalized.phone === "+18005550199");
         assert("Normalization stores priority", normalized.priority === 90);
         assert("Normalization parses comma-separated tags into array", Array.isArray(normalized.tags) && normalized.tags.includes("enterprise") && normalized.tags.includes("vip"));
-        assert("Normalization creates default email and voice consent", normalized.email_consent?.status === "GRANTED" && normalized.voice_consent?.status === "GRANTED");
+        assert("Normalization leaves consent unknown until it is explicitly granted", normalized.email_consent?.status === "UNKNOWN" && normalized.voice_consent?.status === "UNKNOWN");
 
-        // --- 5. Validation Rules ---
         let errorThrown = false;
         try {
             normalizeLead({ name: "Missing Email Contact" });

@@ -19,10 +19,6 @@ const readCsv = (req) => {
     return csv;
 };
 
-/**
- * INPUT 2a — POST /api/leads/import-csv/preview
- * Returns detected headers, auto column mapping and the first rows, without saving.
- */
 export const previewCsv = asyncHandler(async (req, res) => {
     try {
         const { headers, mapping, leads } = csvToLeads(readCsv(req), req.body.columnMap);
@@ -34,10 +30,6 @@ export const previewCsv = asyncHandler(async (req, res) => {
     }
 });
 
-/**
- * INPUT 2b — POST /api/leads/import-csv
- * Body: { csv: string, columnMap?: { email: "Work Email", name: "Full Name", ... }, updateExisting?: boolean }
- */
 export const importCsv = asyncHandler(async (req, res) => {
     let parsed;
     try {
