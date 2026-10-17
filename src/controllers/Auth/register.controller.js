@@ -1,5 +1,6 @@
-﻿import bcrypt from "bcrypt";
+import bcrypt from "bcrypt";
 import { User } from "../../models/user.model.js";
+import { Lead } from "../../models/lead.model.js";
 import { verifyCaptcha } from "../../utils/captcha.js";
 import { signAuthToken } from "../../utils/jwt.js";
 import { toPublicUser } from "../../utils/user.js";
@@ -45,6 +46,28 @@ export const signup = asyncHandler(async (req, res) => {
         passwordHash,
         authProvider: "local",
     });
+
+    try {
+        const orgId = Number(user.organization_id || 1);
+        const nameParts = (fullName || "").trim().split(/\s+/);
+        const firstName = nameParts[0] || fullName;
+        const lastName = nameParts.slice(1).join(" ") || "";
+        await Lead.create({
+            organization_id: orgId,
+            user_id: user.id,
+            name: fullName,
+            first_name: firstName,
+            last_name: lastName,
+            email: email,
+            company: organization || "Direct Signup",
+            source: "SIGNUP",
+            priority: 75,
+            status: "NEW",
+            metadata: { registered_as_user: true, user_id: user.id, signup_time: new Date().toISOString() },
+        });
+    } catch (leadErr) {
+        console.warn("[Signup] Could not auto-create lead for new signup:", leadErr.message);
+    }
 
     const token = signAuthToken(user);
     return res.status(201).json({

@@ -1,0 +1,59 @@
+{
+  "model_name": "nova_brain_lead_next_action",
+  "version": "2.0.0",
+  "framework": "onnx-neural-network",
+  "feature_schema_version": "v2.0",
+  "normalization": "clip_divide_by_scale",
+  "accuracy": 0.9667,
+  "total_samples": 4800,
+  "test_samples": 960,
+  "features": [
+    "email_opens",
+    "link_clicks",
+    "email_attempts",
+    "voice_attempts",
+    "hours_since_last_touch",
+    "engagement_score",
+    "email_consent",
+    "voice_consent",
+    "priority",
+    "recent_click",
+    "high_intent",
+    "fatigue"
+  ],
+  "scales": {
+    "email_opens": 8,
+    "link_clicks": 5,
+    "email_attempts": 3,
+    "voice_attempts": 2,
+    "hours_since_last_touch": 168,
+    "engagement_score": 100,
+    "email_consent": 1,
+    "voice_consent": 1,
+    "priority": 100,
+    "recent_click": 1,
+    "high_intent": 1,
+    "fatigue": 1
+  },
+  "classes": {
+    "0": "EMAIL",
+    "1": "CALL",
+    "2": "WAIT"
+  },
+  "architecture": "12-32-16-3",
+  "metrics": {
+    "accuracy": 0.9667,
+    "macro_f1": 0.9633,
+    "weighted_f1": 0.9633
+  },
+  "decision_policy": "expected_utility_with_compliance_gate",
+  "updated_at": "2026-10-14T08:20:09.096532Z",
+  "tensorflow_metrics": {
+    "accuracy": 0.9552,
+    "loss": 0.2256,
+    "framework": "tensorflow.js",
+    "architecture": "12-32-16-3",
+    "feature_schema_version": "v2.0",
+    "trained_at": "2026-10-14T08:20:09.165Z"
+  }
+}

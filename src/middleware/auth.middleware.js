@@ -1,4 +1,4 @@
-﻿import jwt from "jsonwebtoken";
+import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { User } from "../models/user.model.js";
 import { toPublicUser } from "../utils/user.js";
@@ -96,6 +96,8 @@ export const authenticate = async (req, res, next) => {
         req.user = {
             ...publicUser,
             id: String(user.id),
+            organization_id: Number(user.organization_id || user.organizationId || 1),
+            role: user.role || "ORG_ADMIN",
         };
         req.authVia = "user_jwt";
         return next();
@@ -104,11 +106,29 @@ export const authenticate = async (req, res, next) => {
     }
 };
 
+export const requireRole = (...roles) => {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+        if (req.user.role === "SUPER_ADMIN") {
+            return next();
+        }
+        if (!roles.includes(req.user.role)) {
+            return res.status(403).json({
+                error: `Forbidden: role ${req.user.role} does not have permission for this action`,
+            });
+        }
+        return next();
+    };
+};
+
 export const authenticateUserOrN8n = async (req, res, next) => {
     if (matchesN8nBasicAuth(req)) {
         req.authVia = "n8n_basic";
-        req.user = { id: "n8n" };
+        req.user = { id: "n8n", organization_id: 1, role: "SYSTEM_AGENT" };
         return next();
     }
     return authenticate(req, res, next);
 };
+

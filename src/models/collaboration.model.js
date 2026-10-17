@@ -167,5 +167,6 @@ export const Collaboration = {
             [id, userId]
         );
         return result.affectedRows > 0;
+
     },
 };

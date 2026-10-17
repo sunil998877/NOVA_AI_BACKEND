@@ -1,8 +1,10 @@
 export const userSchema = {
     table: "users",
     columns:
-        "id, fullName, organization, email, passwordHash, googleId, authProvider, passwordResetTokenHash, passwordResetExpires, createdAt, updatedAt",
+        "id, organization_id, role, fullName, organization, email, passwordHash, googleId, authProvider, passwordResetTokenHash, passwordResetExpires, createdAt, updatedAt",
     updatable: [
+        "organization_id",
+        "role",
         "fullName",
         "organization",
         "passwordHash",
@@ -13,6 +15,8 @@ export const userSchema = {
     ],
     createTable: `CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
+        organization_id INT NULL,
+        role ENUM('SUPER_ADMIN', 'ORG_ADMIN', 'SALES_MANAGER', 'SALESPERSON', 'CAMPAIGN_OPERATOR', 'SYSTEM_AGENT') NOT NULL DEFAULT 'ORG_ADMIN',
         fullName VARCHAR(255) NOT NULL,
         organization VARCHAR(255) NOT NULL,
         email VARCHAR(255) NOT NULL UNIQUE,
@@ -22,6 +26,8 @@ export const userSchema = {
         passwordResetTokenHash VARCHAR(255) NULL,
         passwordResetExpires DATETIME NULL,
         createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_user_org (organization_id),
+        INDEX idx_user_role (role)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 };

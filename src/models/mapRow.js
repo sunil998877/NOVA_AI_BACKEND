@@ -10,6 +10,7 @@ export const mapRow = (row) => {
     if (row.campaign_id != null) mapped.campaign_id = String(row.campaign_id);
     if (row.conversation_id != null) mapped.conversation_id = String(row.conversation_id);
 
+
     return mapped;
 };
 
