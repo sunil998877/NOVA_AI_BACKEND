@@ -159,11 +159,14 @@ export const OrchestratorService = {
             }
 
             const dueAt = new Date(Date.now() + 30 * 60 * 1000);
+            const callId = rawData.callId ? Number(rawData.callId) : (rawData.call_id ? Number(rawData.call_id) : null);
             const callback = await Callback.create({
                 organization_id: orgId,
                 lead_id: lead.id,
+                call_id: callId,
                 assigned_rep_id: assignedRepId,
                 due_at: dueAt,
+                requested_at: new Date(),
                 status: "OPEN",
                 notes: `Automated handoff: Prospect showed interest / requested callback.`,
             });
@@ -184,7 +187,7 @@ export const OrchestratorService = {
             await eventBus.publish("ChannelOutcomeReceived", {
                 organization_id: orgId,
                 lead_id: lead.id,
-                channel: rawData.channel || "SYSTEM",
+                channel: rawData.channel || "VOICE",
                 outcome,
                 rawData,
             });
@@ -192,10 +195,11 @@ export const OrchestratorService = {
             await eventBus.publish("CallbackCreated", {
                 organization_id: orgId,
                 lead_id: lead.id,
-                channel: rawData.channel || "SYSTEM",
+                channel: "SYSTEM",
                 status: transition.nextState,
                 callback_id: callback.id,
                 due_at: dueAt,
+                call_id: callback.call_id,
                 rawData,
             });
             return;

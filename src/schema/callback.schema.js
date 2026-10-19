@@ -1,11 +1,17 @@
 export const callbackSchema = {
     table: "callbacks",
     columns:
-        "id, organization_id, lead_id, assigned_rep_id, due_at, status, notes, source_event_id, completed_at, created_at, updated_at",
+        "id, organization_id, lead_id, call_id, assigned_rep_id, due_at, requested_at, status, actual_outcome, follow_up_action, sla_status, sla_breached_at, notes, source_event_id, completed_at, created_at, updated_at",
     updatable: [
+        "call_id",
         "assigned_rep_id",
         "due_at",
+        "requested_at",
         "status",
+        "actual_outcome",
+        "follow_up_action",
+        "sla_status",
+        "sla_breached_at",
         "notes",
         "completed_at",
     ],
@@ -13,9 +19,15 @@ export const callbackSchema = {
         id INT AUTO_INCREMENT PRIMARY KEY,
         organization_id INT NOT NULL,
         lead_id INT NOT NULL,
+        call_id INT NULL,
         assigned_rep_id INT NULL,
         due_at DATETIME NOT NULL,
-        status ENUM('OPEN', 'IN_PROGRESS', 'COMPLETED', 'MISSED', 'OVERDUE', 'CANCELLED') NOT NULL DEFAULT 'OPEN',
+        requested_at DATETIME NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
+        actual_outcome VARCHAR(64) NULL,
+        follow_up_action VARCHAR(64) NULL,
+        sla_status VARCHAR(32) NOT NULL DEFAULT 'ON_TRACK',
+        sla_breached_at DATETIME NULL,
         notes TEXT NULL,
         source_event_id INT NULL,
         completed_at DATETIME NULL,
@@ -24,6 +36,8 @@ export const callbackSchema = {
         INDEX idx_cb_org_status (organization_id, status),
         INDEX idx_cb_due (due_at),
         INDEX idx_cb_lead (lead_id),
-        INDEX idx_cb_rep (assigned_rep_id)
+        INDEX idx_cb_rep (assigned_rep_id),
+        INDEX idx_cb_call (call_id),
+        INDEX idx_cb_sla (organization_id, sla_status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 };

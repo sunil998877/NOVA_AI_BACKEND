@@ -1,4 +1,3 @@
-
 import { env } from "../config/env.js";
 import { sendViaSMTP } from "./smtp.js";
 import { sendSingleViaN8n, callN8nWebhook } from "./n8n.js";
@@ -7,8 +6,34 @@ import { toMysqlDateTime } from "./datetime.js";
 import { recordMailDelivered } from "./emailTracking.js";
 import { Campaign } from "../models/campaign.model.js";
 import { audit } from "./audit.js";
+import { unifiedDeliveryService } from "../services/email/unifiedDelivery.service.js";
 
-export async function deliverEmail({ to, subject, html, text, from, replyTo, headers }) {
+export async function deliverEmail({ to, subject, html, text, from, replyTo, headers, orgId = 1, senderAccountId = null }) {
+    try {
+        const unified = await unifiedDeliveryService.deliverSingle({
+            orgId,
+            to,
+            subject,
+            html,
+            text,
+            fromAddress: from,
+            replyTo,
+            headers,
+            senderAccountId,
+        });
+
+        if (unified.status === "SUCCEEDED") {
+            return { messageId: unified.messageId, deliveryMethod: unified.deliveryMethod };
+        }
+        if (unified.status === "SKIPPED") {
+            throw new Error(`Compliance gate blocked: ${unified.skipReason}`);
+        }
+    } catch (err) {
+        if (String(err?.message).startsWith("Compliance gate blocked")) {
+            throw err;
+        }
+    }
+
     if (process.env.EMAIL_DELIVERY_MODE === "smtp") {
         return sendViaSMTP({ to, subject, html, text, from, replyTo, headers });
     }
@@ -17,22 +42,12 @@ export async function deliverEmail({ to, subject, html, text, from, replyTo, hea
         try {
             const result = await sendSingleViaN8n({ to, subject, html, text, from });
             if (result) {
-                console.log(`[Delivery] n8n succeeded for ${to}`);
                 return result;
             }
-        } catch (err) {
-            console.warn(`[Delivery] n8n primary failed for ${to}:`, err.message);
-        }
+        } catch (_) {}
     }
 
-
-    try {
-        const result = await sendViaSMTP({ to, subject, html, text, from, replyTo, headers });
-        console.log(`[Delivery] SMTP succeeded for ${to} (${result.deliveryMethod})`);
-        return result;
-    } catch (err) {
-        throw new Error(`All delivery methods failed for ${to}: ${err.message}`);
-    }
+    return sendViaSMTP({ to, subject, html, text, from, replyTo, headers });
 }
 
 const CONCURRENCY = 5;
@@ -71,7 +86,6 @@ export function runCampaignDeliveryInBackground({
                     const item = batch[idx];
 
                     if (result.status === "fulfilled") {
-
                         sent += 1;
                         await Mail.updateById(item.id, {
                             status: 1,
@@ -80,9 +94,6 @@ export function runCampaignDeliveryInBackground({
                         }).catch(() => {});
                         await recordMailDelivered(item.id, campaign.id);
                     } else {
-
-                        console.warn(`[Delivery] SMTP failed ${item.email}: ${result.reason?.message}`);
-
                         let n8nFallbackOk = false;
                         if (env.n8nWebhookUrl) {
                             try {
@@ -98,7 +109,6 @@ export function runCampaignDeliveryInBackground({
                                 const n8nRetry = await callN8nWebhook(singlePayload);
                                 n8nFallbackOk = n8nRetry && n8nRetry.ok;
                                 if (n8nFallbackOk) {
-                                    console.log(`[Delivery] n8n fallback succeeded for ${item.email}`);
                                     sent += 1;
                                     await Mail.updateById(item.id, {
                                         status: 1,
@@ -107,9 +117,7 @@ export function runCampaignDeliveryInBackground({
                                     }).catch(() => {});
                                     await recordMailDelivered(item.id, campaign.id);
                                 }
-                            } catch (n8nErr) {
-                                console.error(`[Delivery] n8n fallback failed for ${item.email}:`, n8nErr.message);
-                            }
+                            } catch (_) {}
                         }
 
                         if (!n8nFallbackOk) {
@@ -133,8 +141,5 @@ export function runCampaignDeliveryInBackground({
             total_recipients: totalRecipients,
         });
         await audit(userId, "CAMPAIGN_SEND_SMTP", campaign.id, null);
-        console.log(
-            `[Delivery] Campaign ${campaign.id} complete: ${sent}/${totalRecipients} sent, ${failed} failed`
-        );
     });
 }

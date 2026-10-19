@@ -18,6 +18,10 @@ import { leadEventSchema } from "./lead-event.schema.js";
 import { callbackSchema } from "./callback.schema.js";
 import { suppressionSchema } from "./suppression.schema.js";
 import { aseExecutionSchema } from "./ase-execution.schema.js";
+import { callSchema } from "./call.schema.js";
+import { telephonyWebhookEventSchema } from "./telephony-webhook-event.schema.js";
+import { senderAccountSchema } from "./sender-account.schema.js";
+import { emailDeliverySchema } from "./email-delivery.schema.js";
 
 export const schemas = [
     organizationSchema,
@@ -40,6 +44,10 @@ export const schemas = [
     callbackSchema,
     suppressionSchema,
     aseExecutionSchema,
+    callSchema,
+    telephonyWebhookEventSchema,
+    senderAccountSchema,
+    emailDeliverySchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);
@@ -54,4 +62,8 @@ export {
     callbackSchema,
     suppressionSchema,
     aseExecutionSchema,
+    callSchema,
+    telephonyWebhookEventSchema,
+    senderAccountSchema,
+    emailDeliverySchema,
 };

@@ -58,6 +58,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         if (payload.prompt) qParams.set("message", payload.prompt);
         if (lead.id) qParams.set("leadId", String(lead.id));
         if (lead.organization_id) qParams.set("orgId", String(lead.organization_id));
+        if (payload.callId) qParams.set("callId", String(payload.callId));
 
         const qs = qParams.toString() ? `?${qParams.toString()}` : "";
         const answerUrl = payload.answerUrl || `${effectiveBaseUrl}/api/engine/voice/plivo/answer${qs}`;
@@ -87,6 +88,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
                 },
                 metadata: {
                     callId: simulatedCallId,
+                    providerCallId: simulatedCallId,
                     phone: to,
                     provider: "plivo",
                 },
@@ -140,12 +142,14 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
 
                 const agentData = await agentResponse.json().catch(() => ({}));
                 if (agentResponse.ok) {
+                    const resolvedUuid = agentData.request_uuid || agentData.api_id || agentData.phlo_id || `agent_${Date.now()}`;
                     return {
                         channel: "VOICE",
                         status: "SUCCEEDED",
                         rawResponse: agentData,
                         metadata: {
-                            providerCallId: agentData.api_id || agentData.phlo_id || agentData.request_uuid || `agent_${Date.now()}`,
+                            callId: resolvedUuid,
+                            providerCallId: resolvedUuid,
                             phone: to,
                             provider: "plivo_agentflow",
                             flowId: agentData.phlo_id || "2c0b21ef-0183-4e77-99be-bc86ef57a36e",
@@ -175,7 +179,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
                 }),
             });
 
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
 
             if (!response.ok) {
                 return {
@@ -191,6 +195,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
                 status: "SUCCEEDED",
                 rawResponse: data,
                 metadata: {
+                    callId: data.request_uuid,
                     providerCallId: data.request_uuid,
                     phone: to,
                     provider: "plivo",
@@ -240,7 +245,8 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
             text.includes("call me back") ||
             text.includes("call tomorrow") ||
             text.includes("call later") ||
-            text.includes("bad time")
+            text.includes("bad time") ||
+            text.includes("callback")
         ) {
             return {
                 outcome: ASE_OUTCOMES.CALLBACK,
@@ -255,7 +261,8 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
             text.includes("interested") ||
             text.includes("sounds good") ||
             text.includes("tell me more") ||
-            text.includes("send details")
+            text.includes("send details") ||
+            text.includes("book a call")
         ) {
             return {
                 outcome: ASE_OUTCOMES.INTERESTED,
@@ -269,7 +276,8 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         if (
             text.includes("not interested") ||
             text.includes("no thank you") ||
-            text.includes("not looking")
+            text.includes("not looking") ||
+            text.includes("no thanks")
         ) {
             return {
                 outcome: ASE_OUTCOMES.NOT_INTERESTED,
@@ -280,9 +288,19 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
             };
         }
 
+        if (!text.trim()) {
+            return {
+                outcome: ASE_OUTCOMES.AMBIGUOUS,
+                disposition: "connected_unspecified",
+                isDnc: false,
+                callbackRequested: false,
+                interested: false,
+            };
+        }
+
         return {
-            outcome: ASE_OUTCOMES.NO_ANSWER,
-            disposition: "no_answer",
+            outcome: ASE_OUTCOMES.AMBIGUOUS,
+            disposition: "unclassified",
             isDnc: false,
             callbackRequested: false,
             interested: false,

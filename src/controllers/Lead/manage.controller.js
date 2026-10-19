@@ -17,6 +17,8 @@ export const listLeads = asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
 
+    await Callback.ensureHandoffQueue(orgId).catch(() => {});
+
     const { items, total } = await Lead.list(orgId, {
         q: String(req.query.q || ""),
         source: String(req.query.source || ""),

@@ -1,5 +1,5 @@
 import { BaseChannelAdapter } from "./base.adapter.js";
-import { deliverEmail } from "../../../utils/deliveryChain.js";
+import { unifiedDeliveryService } from "../../email/unifiedDelivery.service.js";
 import { env } from "../../../config/env.js";
 import { draftCompanyPersonalizedEmail } from "../leadEmailDrafter.service.js";
 import { Lead } from "../../../models/lead.model.js";
@@ -98,25 +98,48 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
         }
 
         try {
-            const result = await deliverEmail({
+            const idempotencyKey = payload.idempotencyKey || `ase_lead_${lead.id}_email_${Date.now()}`;
+            const result = await unifiedDeliveryService.deliverSingle({
+                orgId: lead.organization_id || 1,
                 to: lead.email,
                 subject,
                 html: bodyHtml,
                 text: bodyText,
-                from: fromAddress,
+                fromAddress,
                 replyTo: payload.replyTo || senderEmail,
+                leadId: lead.id,
+                idempotencyKey,
             });
+
+            if (result.status === "SUCCEEDED") {
+                return {
+                    channel: "EMAIL",
+                    status: "SUCCEEDED",
+                    rawResponse: result,
+                    metadata: {
+                        messageId: result.messageId || `nova-email-${Date.now()}`,
+                        to: lead.email,
+                        subject,
+                        research: companyResearch,
+                        senderAccountId: result.senderAccountId,
+                    },
+                };
+            }
+
+            if (result.status === "SKIPPED") {
+                return {
+                    channel: "EMAIL",
+                    status: "FAILED",
+                    error: `Compliance gate blocked delivery: ${result.skipReason}`,
+                    rawResponse: result,
+                };
+            }
 
             return {
                 channel: "EMAIL",
-                status: "SUCCEEDED",
+                status: "FAILED",
+                error: result.error || "Delivery failed",
                 rawResponse: result,
-                metadata: {
-                    messageId: result?.messageId || `nova-email-${Date.now()}`,
-                    to: lead.email,
-                    subject,
-                    research: companyResearch,
-                },
             };
         } catch (error) {
             return {

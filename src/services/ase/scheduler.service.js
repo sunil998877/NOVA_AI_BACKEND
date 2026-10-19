@@ -2,6 +2,7 @@ import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { AseExecution } from "../../models/ase-execution.model.js";
 import { Callback } from "../../models/callback.model.js";
+import { Call } from "../../models/call.model.js";
 import { emailAdapter } from "./adapters/email.adapter.js";
 import { voiceAdapter } from "./adapters/voice.adapter.js";
 import { normalizeChannelOutcome } from "./outcomeNormalizer.service.js";
@@ -164,87 +165,178 @@ class AseScheduler {
 
         try {
             let result;
-            let channel;
+            let channel = action === "EMAIL" ? "EMAIL" : "VOICE";
+            let callRecord = null;
 
-            await eventBus.publish("ActionDispatched", {
-                organization_id: orgId,
-                lead_id: freshLead.id,
-                channel: action === "EMAIL" ? "EMAIL" : "VOICE",
-                action,
-                execution_id: claim.executionId,
-            });
+            if (action === "CALL") {
+                const callResult = await Call.create({
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    idempotency_key: idempotencyKey,
+                    phone_number: freshLead.phone,
+                    call_channel: "VOICE",
+                    call_type: "OUTBOUND",
+                    initiation_source: "AUTONOMOUS_AI",
+                    provider: "plivo",
+                    provider_status: "initiated",
+                    normalized_outcome: "INITIATED",
+                    cost_status: "PENDING",
+                });
+                callRecord = callResult.call;
 
-            if (action === "EMAIL") {
-                channel = "EMAIL";
+                await eventBus.publish("ActionDispatched", {
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    channel: "VOICE",
+                    action: "CALL",
+                    execution_id: claim.executionId,
+                    call_id: callRecord.id,
+                });
+
+                result = await voiceAdapter.execute(freshLead, "CALL", {
+                    callId: callRecord.id,
+                });
+
+                if (result.status !== "SUCCEEDED") {
+                    await Call.updateById(orgId, callRecord.id, {
+                        provider_status: "request_failed",
+                        normalized_outcome: "FAILED",
+                        failure_reason: result.error || "Provider call creation rejected",
+                    });
+                    await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
+                    await eventBus.publish("ActionFailed", {
+                        organization_id: orgId,
+                        lead_id: freshLead.id,
+                        channel: "VOICE",
+                        action: "CALL",
+                        call_id: callRecord.id,
+                        status: result.status,
+                        metadata: result.metadata || { error: result.error },
+                    });
+                    return;
+                }
+
+                const providerUuid = result.metadata?.providerCallId || result.metadata?.callId;
+                await Call.updateById(orgId, callRecord.id, {
+                    provider_call_uuid: providerUuid,
+                    provider_status: "initiated",
+                    normalized_outcome: "INITIATED",
+                });
+
+                const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
+                currentCounters.voice = (currentCounters.voice || 0) + 1;
+                currentCounters.total = (currentCounters.total || 0) + 1;
+
+                const stateTransition = transitionLeadState(freshLead.status, "CALL_INITIATED");
+                const nextStatus = stateTransition.nextState;
+
+                await Lead.updateById(
+                    freshLead.id,
+                    {
+                        status: nextStatus,
+                        attempt_counters: currentCounters,
+                        last_contacted_at: new Date(),
+                        next_action_time: null,
+                    },
+                    orgId
+                );
+
+                await eventBus.publish("ActionCompleted", {
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    channel: "VOICE",
+                    action: "CALL",
+                    status: result.status,
+                    call_id: callRecord.id,
+                    provider_call_uuid: providerUuid,
+                    metadata: result.metadata || {},
+                });
+
+                if (stateTransition.changed) {
+                    await eventBus.publish("LeadStateChanged", {
+                        organization_id: orgId,
+                        lead_id: freshLead.id,
+                        channel: "VOICE",
+                        from_state: freshLead.status,
+                        to_state: nextStatus,
+                    });
+                }
+
+                await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
+                return;
+            } else if (action === "EMAIL") {
+                await eventBus.publish("ActionDispatched", {
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    channel: "EMAIL",
+                    action: "EMAIL",
+                    execution_id: claim.executionId,
+                });
+
                 result = await emailAdapter.execute(freshLead, "SEND");
-            } else if (action === "CALL") {
-                channel = "VOICE";
-                result = await voiceAdapter.execute(freshLead, "CALL");
+
+                if (result.status !== "SUCCEEDED") {
+                    await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
+                    await eventBus.publish("ActionFailed", {
+                        organization_id: orgId,
+                        lead_id: freshLead.id,
+                        channel: "EMAIL",
+                        action: "EMAIL",
+                        status: result.status,
+                        metadata: result.metadata || { error: result.error },
+                    });
+                    return;
+                }
+
+                const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
+                currentCounters.email = (currentCounters.email || 0) + 1;
+                currentCounters.total = (currentCounters.total || 0) + 1;
+
+                const stateTransition = transitionLeadState(freshLead.status, "EMAIL_SENT");
+                const nextStatus = stateTransition.nextState;
+
+                await Lead.updateById(
+                    freshLead.id,
+                    {
+                        status: nextStatus,
+                        attempt_counters: currentCounters,
+                        last_contacted_at: new Date(),
+                        next_action_time: null,
+                    },
+                    orgId
+                );
+
+                await eventBus.publish("ActionCompleted", {
+                    organization_id: orgId,
+                    lead_id: freshLead.id,
+                    channel: "EMAIL",
+                    action: "EMAIL",
+                    status: result.status,
+                    metadata: result.metadata || { error: result.error },
+                });
+
+                if (stateTransition.changed) {
+                    await eventBus.publish("LeadStateChanged", {
+                        organization_id: orgId,
+                        lead_id: freshLead.id,
+                        channel: "EMAIL",
+                        from_state: freshLead.status,
+                        to_state: nextStatus,
+                    });
+                }
+
+                const outcome = normalizeChannelOutcome("EMAIL", result.rawResponse);
+                await OrchestratorService.handleOutcomeEvent(
+                    { ...freshLead, status: nextStatus, attempt_counters: currentCounters },
+                    outcome,
+                    { channel: "EMAIL", ...result.metadata }
+                );
+
+                await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
             } else {
                 await AseExecution.complete(claim.executionId, "CANCELLED", { reason: `Unknown action ${action}` });
                 return;
             }
-
-            if (result.status !== "SUCCEEDED") {
-                await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
-                await eventBus.publish("ActionFailed", {
-                    organization_id: orgId,
-                    lead_id: freshLead.id,
-                    channel,
-                    action,
-                    status: result.status,
-                    metadata: result.metadata || { error: result.error },
-                });
-                return;
-            }
-
-            const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
-            if (channel === "EMAIL") currentCounters.email = (currentCounters.email || 0) + 1;
-            if (channel === "VOICE") currentCounters.voice = (currentCounters.voice || 0) + 1;
-            currentCounters.total = (currentCounters.total || 0) + 1;
-
-            const transitionEvent = channel === "EMAIL" ? "EMAIL_SENT" : "CALL_INITIATED";
-            const stateTransition = transitionLeadState(freshLead.status, transitionEvent);
-            const nextStatus = stateTransition.nextState;
-
-            await Lead.updateById(
-                freshLead.id,
-                {
-                    status: nextStatus,
-                    attempt_counters: currentCounters,
-                    last_contacted_at: new Date(),
-                    next_action_time: null,
-                },
-                orgId
-            );
-
-            await eventBus.publish("ActionCompleted", {
-                organization_id: orgId,
-                lead_id: freshLead.id,
-                channel,
-                action,
-                status: result.status,
-                metadata: result.metadata || { error: result.error },
-            });
-
-            if (stateTransition.changed) {
-                await eventBus.publish("LeadStateChanged", {
-                    organization_id: orgId,
-                    lead_id: freshLead.id,
-                    channel,
-                    from_state: freshLead.status,
-                    to_state: nextStatus,
-                });
-            }
-
-            const outcome = normalizeChannelOutcome(channel, result.rawResponse);
-            await OrchestratorService.handleOutcomeEvent(
-                { ...freshLead, status: nextStatus, attempt_counters: currentCounters },
-                outcome,
-                { channel, ...result.metadata }
-            );
-
-            await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
         } catch (err) {
             console.error(`[ASE Scheduler] Failed executing ${action} on lead ${freshLead.id}:`, err.message);
             await AseExecution.complete(claim.executionId, "FAILED", { error: err.message });
@@ -262,10 +354,14 @@ class AseScheduler {
         try {
             const rows = await Callback.list(1, { overdue: true, limit: 50 });
             for (const cb of rows) {
-                if (cb.status === "OPEN") {
-                    await Callback.updateById(cb.organization_id || 1, cb.id, { status: "OVERDUE" });
+                if (cb.status === "OPEN" || cb.status === "SCHEDULED" || cb.status === "DUE") {
+                    await Callback.updateById(cb.organization_id || 1, cb.id, {
+                        status: "OVERDUE",
+                        sla_status: "BREACHED",
+                        sla_breached_at: new Date(),
+                    });
                     await Lead.updateById(cb.lead_id, { health: "RED" }, cb.organization_id || 1);
-                    await eventBus.publish("CallbackCompleted", {
+                    await eventBus.publish("CallbackSlaBreached", {
                         organization_id: cb.organization_id || 1,
                         lead_id: cb.lead_id,
                         channel: "SYSTEM",

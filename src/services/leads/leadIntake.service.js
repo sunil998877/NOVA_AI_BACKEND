@@ -26,6 +26,11 @@ const CONSUMER_EMAIL_DOMAINS = new Set([
     "protonmail.com",
     "live.com",
     "msn.com",
+    "example.com",
+    "example.org",
+    "example.net",
+    "test.com",
+    "sample.com",
 ]);
 
 const lockTails = new Map();
@@ -143,7 +148,7 @@ export async function processLead(rawLead, options = {}) {
         userId = null,
         source = "API",
         updateExisting = false,
-        matchDomain = true,
+        matchDomain = false,
         suppressedCache = null,
         existingCache = null,
     } = options;

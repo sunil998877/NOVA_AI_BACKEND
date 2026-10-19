@@ -1,31 +1,36 @@
-﻿
-import { execute } from "../../config/db.js";
-import { env } from "../../config/env.js";
 import { Campaign } from "../../models/campaign.model.js";
 import { Mail } from "../../models/mail.model.js";
+import { EmailDelivery } from "../../models/email-delivery.model.js";
 import { audit } from "../../utils/audit.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { signCampaignSendToken } from "../../utils/campaign-send-token.js";
 import { renderCampaignEmail } from "../../utils/emailRenderer.js";
 import { getPublicApiUrl } from "../../utils/urlHelper.js";
-import { toMysqlDateTime } from "../../utils/datetime.js";
 import { prepareEmailTracking } from "../../utils/emailTracking.js";
-import { callN8nWebhook } from "../../utils/n8n.js";
-import { runCampaignDeliveryInBackground } from "../../utils/deliveryChain.js";
+import { checkRecipientCompliance } from "../../services/email/complianceCheck.service.js";
+import { executeCampaignDryRun } from "../../services/email/dryRun.service.js";
+import { isTimeInSendingWindow, calculateNextWindowOpening } from "../../services/email/pacingWindow.service.js";
+import { unifiedDeliveryService } from "../../services/email/unifiedDelivery.service.js";
+import { toMysqlDateTime } from "../../utils/datetime.js";
 
 export const sendCampaign = asyncHandler(async (req, res) => {
     const campaignId = req.params.campaignId || req.params.id;
+    const orgId = Number(req.user?.organization_id || 1);
     const campaign = await Campaign.findOwned(campaignId, req.user.id);
 
     if (!campaign) {
         return res.status(403).json({ error: "Access denied: You do not own this campaign" });
     }
 
-    const currentStatus = String(campaign.status || "").toLowerCase();
+    if (req.body?.dryRun === true || req.query?.dryRun === "true") {
+        const dryRunResult = await executeCampaignDryRun(campaign.id, req.user.id, orgId);
+        return res.status(200).json(dryRunResult);
+    }
 
+    const currentStatus = String(campaign.status || "").toLowerCase();
     if (currentStatus === "processing") {
         const updatedAt = campaign.updatedAt ? new Date(campaign.updatedAt).getTime() : 0;
-        const isStale = (Date.now() - updatedAt) > 60_000;
+        const isStale = (Date.now() - updatedAt) > 120_000;
         if (!isStale && !req.body?.force) {
             return res.status(409).json({
                 error: "Campaign is currently sending. Please wait a moment.",
@@ -33,22 +38,10 @@ export const sendCampaign = asyncHandler(async (req, res) => {
                 status: "processing",
             });
         }
-        console.warn(`[sendCampaign] Recovering stale processing campaign ${campaign.id}`);
-    }
-
-    if (currentStatus === "completed" || req.body?.force) {
-        await Campaign.updateById(campaign.id, {
-            status: "draft",
-            camp_status: "Draft",
-            sent_count: 0,
-            failed_count: 0,
-        });
-        console.log(`[sendCampaign] Reset campaign ${campaign.id} for resend`);
     }
 
     const recipients = await Mail.findByCampaignId(campaign.id);
     const totalRecipients = recipients.length;
-
     if (totalRecipients === 0) {
         return res.status(400).json({
             error: "No recipients found for this campaign. Add mails before sending.",
@@ -57,162 +50,168 @@ export const sendCampaign = asyncHandler(async (req, res) => {
         });
     }
 
-    await Campaign.updateById(campaign.id, {
-        status: "processing",
-        camp_status: "Processing",
-        total_recipients: totalRecipients,
-        sent_count: 0,
-        failed_count: 0,
-    });
+    const campaignUpdates = {};
+    if (req.body?.senderAccountId) campaignUpdates.sender_account_id = Number(req.body.senderAccountId);
+    if (req.body?.minDelaySeconds !== undefined) campaignUpdates.min_delay_seconds = Number(req.body.minDelaySeconds);
+    if (req.body?.maxDelaySeconds !== undefined) campaignUpdates.max_delay_seconds = Number(req.body.maxDelaySeconds);
+    if (req.body?.maxConcurrency !== undefined) campaignUpdates.max_concurrency = Number(req.body.maxConcurrency);
+    if (req.body?.sendingWindowStart) campaignUpdates.sending_window_start = String(req.body.sendingWindowStart);
+    if (req.body?.sendingWindowEnd) campaignUpdates.sending_window_end = String(req.body.sendingWindowEnd);
+    if (req.body?.sendingDays) campaignUpdates.sending_days = typeof req.body.sendingDays === "string" ? req.body.sendingDays : JSON.stringify(req.body.sendingDays);
+    if (req.body?.timezone) campaignUpdates.timezone = String(req.body.timezone);
+    if (req.body?.dailyCap !== undefined) campaignUpdates.daily_cap = Number(req.body.dailyCap);
+    if (req.body?.hourlyCap !== undefined) campaignUpdates.hourly_cap = Number(req.body.hourlyCap);
 
-    const senderEmail = (
-        campaign.sender_email ||
-        campaign.senderEmail ||
-        req.body?.senderEmail ||
-        campaign.workMail ||
-        req.user?.email ||
-        env.novaSenderEmail ||
-        "nova@yourdomain.com"
-    ).trim();
+    const mergedCampaign = { ...campaign, ...campaignUpdates };
+    const inWindow = isTimeInSendingWindow(mergedCampaign);
+    const initialStatus = inWindow ? "processing" : "scheduled";
+    const initialScheduledDate = inWindow ? null : calculateNextWindowOpening(mergedCampaign);
 
-    const senderName = (
-        campaign.sender_name ||
-        campaign.senderName ||
-        req.body?.senderName ||
-        req.user?.fullName ||
-        env.novaSenderName ||
-        "NOVA AI"
-    ).trim();
-
-    const fromAddress = `"${senderName}" <${senderEmail}>`;
-
-    const accessToken = signCampaignSendToken({ campaignId: campaign.id, userId: req.user.id });
-    const apiBaseUrl = await getPublicApiUrl(req);
-
-    const rawSubject = campaign.subject || `Campaign: ${campaign.title}`;
-    const rawBody =
-        campaign.body ||
-        `Hello {{recipientName}},\n\nThis is ${campaign.title}.\n\nBest regards,<br>{{senderName}}`;
-
-    const renderedRecipients = await Promise.all(
-        recipients.map(async (mail) => {
-            const rendered = renderCampaignEmail({
-                subject: rawSubject,
-                body: rawBody,
-                recipient: {
-                    id: mail.id,
-                    email: mail.email,
-                    recipientEmail: mail.email,
-                    full_name: mail.full_name,
-                    recipientName: mail.full_name,
-                },
-                campaign: {
-                    id: campaign.id,
-                    title: campaign.title,
-                    sender_name: senderName,
-                    senderName,
-                    sender_email: senderEmail,
-                    senderEmail,
-                    workMail: campaign.workMail,
-                },
-                mailId: mail.id,
-                apiBaseUrl,
-                enableTracking: false,
-            });
-
-            const tracked = await prepareEmailTracking(rendered.html, {
-                mailId: mail.id,
-                campaignId: campaign.id,
-                apiBaseUrl,
-            });
-
-            return {
-                id: mail.id,
-                email: mail.email,
-                recipientEmail: mail.email,
-                full_name: mail.full_name || "",
-                recipientName: mail.full_name || "",
-                campaign_id: campaign.id,
-                subject: rendered.subject,
-                body: rendered.text,
-                html: tracked.html,
-                senderEmail,
-                senderName,
-                from: fromAddress,
-            };
-        })
-    );
-
-    await execute(
-        `UPDATE mails SET status = 0, delivery_status = 'pending' WHERE campaign_id = ?`,
-        [campaign.id]
-    );
-
-    const firstItem = renderedRecipients[0] || {};
-    const n8nPayload = {
-        campaignId: campaign.id,
-        senderEmail,
-        senderName,
-        from: fromAddress,
-        fromEmail: senderEmail,
-        subject: firstItem.subject || rawSubject,
-        body: firstItem.body || rawBody,
-        html: firstItem.html || "",
-        action: "start_campaign",
-        totalRecipients,
-        timestamp: new Date().toISOString(),
-        accessToken,
-        apiBaseUrl,
-        recipients: renderedRecipients,
-        data: renderedRecipients,
-    };
-
-    if (env.n8nWebhookUrl) {
-        try {
-            console.log(`[sendCampaign] n8n primary attempt for campaign ${campaign.id}`);
-            const n8nRes = await callN8nWebhook(n8nPayload);
-            if (n8nRes && n8nRes.ok) {
-                await audit(req.user.id, "CAMPAIGN_SEND", campaign.id, req.ip);
-                return res.status(200).json({
-                    success: true,
-                    campaignId: campaign.id,
-                    totalRecipients,
-                    sentCount: 0,
-                    failedCount: 0,
-                    status: "processing",
-                    n8nTriggered: true,
-                    deliveryMethod: "n8n",
-                    sender: fromAddress,
-                    message: `Campaign queued: ${totalRecipients} recipient(s) dispatched to n8n SMTP worker`,
-                });
-            }
-            console.warn(`[sendCampaign] n8n primary responded with status ${n8nRes?.status}`);
-        } catch (err) {
-            console.warn(`[sendCampaign] n8n primary failed: ${err.message}, switching to SMTP`);
-        }
-    } else {
-        console.log("[sendCampaign] n8n not configured, using SMTP directly");
+    campaignUpdates.status = initialStatus;
+    campaignUpdates.camp_status = inWindow ? "Processing" : "Scheduled";
+    campaignUpdates.total_recipients = totalRecipients;
+    if (initialScheduledDate) {
+        campaignUpdates.scheduledDate = toMysqlDateTime(initialScheduledDate);
     }
 
-    res.status(202).json({
+    await Campaign.updateById(campaign.id, campaignUpdates);
+
+    const apiBaseUrl = await getPublicApiUrl(req);
+    const rawSubject = campaign.subject || `Campaign: ${campaign.title}`;
+    const rawBody = campaign.body || `Hello {{recipientName}},\n\nBest regards,<br>{{senderName}}`;
+
+    const seenEmails = new Set();
+    let eligibleCount = 0;
+    let skippedCount = 0;
+
+    for (const mail of recipients) {
+        const email = String(mail.email || "").toLowerCase().trim();
+        const idempotencyKey = `camp_${campaign.id}_mail_${mail.id}_v${mail.attempts_count || 1}`;
+
+        if (seenEmails.has(email)) {
+            await EmailDelivery.create({
+                organization_id: orgId,
+                campaign_id: campaign.id,
+                mail_id: mail.id,
+                recipient_email: email,
+                recipient_name: mail.full_name || "",
+                subject: rawSubject,
+                idempotency_key: idempotencyKey,
+                status: "skipped",
+                skip_reason: "DUPLICATE_RECIPIENT_IN_CAMPAIGN",
+            });
+            await Mail.updateById(mail.id, {
+                status: 0,
+                delivery_status: "failed",
+                skip_reason: "DUPLICATE_RECIPIENT_IN_CAMPAIGN",
+            }).catch(() => {});
+            skippedCount += 1;
+            continue;
+        }
+        seenEmails.add(email);
+
+        const compliance = await checkRecipientCompliance(orgId, {
+            email,
+            phone: null,
+            do_not_contact: false,
+        });
+
+        if (!compliance.eligible) {
+            await EmailDelivery.create({
+                organization_id: orgId,
+                campaign_id: campaign.id,
+                mail_id: mail.id,
+                recipient_email: email,
+                recipient_name: mail.full_name || "",
+                subject: rawSubject,
+                idempotency_key: idempotencyKey,
+                status: "skipped",
+                skip_reason: compliance.reason,
+            });
+            await Mail.updateById(mail.id, {
+                status: 0,
+                delivery_status: "failed",
+                skip_reason: compliance.reason,
+            }).catch(() => {});
+            skippedCount += 1;
+            continue;
+        }
+
+        const rendered = renderCampaignEmail({
+            subject: rawSubject,
+            body: rawBody,
+            recipient: {
+                id: mail.id,
+                email,
+                recipientEmail: email,
+                full_name: mail.full_name,
+                recipientName: mail.full_name || "Valued Customer",
+            },
+            campaign: {
+                id: campaign.id,
+                title: campaign.title,
+                sender_name: campaign.sender_name || "NOVA AI",
+                sender_email: campaign.sender_email || "nova@yourdomain.com",
+            },
+            mailId: mail.id,
+            apiBaseUrl,
+            enableTracking: false,
+        });
+
+        const tracked = await prepareEmailTracking(rendered.html, {
+            mailId: mail.id,
+            campaignId: campaign.id,
+            apiBaseUrl,
+        });
+
+        await EmailDelivery.create({
+            organization_id: orgId,
+            campaign_id: campaign.id,
+            mail_id: mail.id,
+            sender_account_id: mergedCampaign.sender_account_id || null,
+            recipient_email: email,
+            recipient_name: mail.full_name || "",
+            subject: rendered.subject,
+            body_html: tracked.html,
+            body_text: rendered.text,
+            idempotency_key: idempotencyKey,
+            status: inWindow ? "pending" : "scheduled",
+            scheduled_at: initialScheduledDate,
+            headers: {
+                "List-Unsubscribe": `<${apiBaseUrl}/api/track/unsubscribe/${campaign.id}/${mail.id}>`,
+            },
+        });
+
+        await Mail.updateById(mail.id, {
+            status: 0,
+            delivery_status: "pending",
+            idempotency_key: idempotencyKey,
+        }).catch(() => {});
+
+        eligibleCount += 1;
+    }
+
+    await audit(req.user.id, "CAMPAIGN_SEND_INITIATED", campaign.id, req.ip);
+
+    if (inWindow) {
+        setImmediate(() => {
+            unifiedDeliveryService.processCampaignQueue(campaign.id).catch((err) => {
+                console.error("[sendCampaign] Background queue processing error:", err.message);
+            });
+        });
+    }
+
+    return res.status(202).json({
         success: true,
         campaignId: campaign.id,
         totalRecipients,
-        sentCount: 0,
-        failedCount: 0,
-        status: "processing",
-        n8nTriggered: false,
-        deliveryMethod: "smtp",
-        sender: fromAddress,
-        message: `Campaign queued: sending ${totalRecipients} email(s) via SMTP`,
-    });
-
-    runCampaignDeliveryInBackground({
-        renderedRecipients,
-        campaign,
-        fromAddress,
-        fullPayload: n8nPayload,
-        userId: req.user.id,
-        replyTo: req.user?.email || undefined,
+        eligibleCount,
+        skippedCount,
+        status: initialStatus,
+        inSendingWindow: inWindow,
+        scheduledFor: initialScheduledDate ? initialScheduledDate.toISOString() : null,
+        message: inWindow
+            ? `Campaign queued: processing ${eligibleCount} eligible recipient(s) with rate-limited inbox rotation`
+            : `Campaign scheduled for next sending window (${initialScheduledDate?.toISOString()})`,
     });
 });

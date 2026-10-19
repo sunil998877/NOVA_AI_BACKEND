@@ -25,6 +25,18 @@ const toLead = (row) => {
     mapped.email_consent = parseJson(row.email_consent, null);
     mapped.voice_consent = parseJson(row.voice_consent, null);
     mapped.whatsapp_consent = parseJson(row.whatsapp_consent, null);
+    if (row.callback_id || row.callback_due_at || row.callback_due) {
+        mapped.callback = {
+            id: row.callback_id || null,
+            due_at: row.callback_due_at || row.callback_due || null,
+            status: row.callback_status || "OPEN",
+            sla_status: row.callback_sla_status || "ON_TRACK",
+            notes: row.callback_notes || null,
+            rep_name: row.callback_rep_name || mapped.assigned_rep_name || null,
+        };
+    } else {
+        mapped.callback = null;
+    }
     return mapped;
 };
 
@@ -47,9 +59,26 @@ const serialize = (key, value) => {
 export const Lead = {
     async findById(id, orgId = null) {
         const selected = columns.split(",").map((column) => `l.${column.trim()}`).join(", ");
-        let sql = `SELECT ${selected}, u.fullName AS assigned_rep_name
+        let sql = `SELECT ${selected}, u.fullName AS assigned_rep_name,
+                     cb.id AS callback_id,
+                     cb.due_at AS callback_due_at,
+                     cb.status AS callback_status,
+                     cb.sla_status AS callback_sla_status,
+                     cb.notes AS callback_notes,
+                     cb_u.fullName AS callback_rep_name
              FROM ${table} l
              LEFT JOIN users u ON u.id = l.assigned_rep_id
+             LEFT JOIN (
+                 SELECT c1.id, c1.lead_id, c1.due_at, c1.status, c1.sla_status, c1.notes, c1.assigned_rep_id
+                 FROM callbacks c1
+                 INNER JOIN (
+                     SELECT lead_id, MAX(id) AS max_id
+                     FROM callbacks
+                     WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+                     GROUP BY lead_id
+                 ) c2 ON c1.id = c2.max_id
+             ) cb ON cb.lead_id = l.id
+             LEFT JOIN users cb_u ON cb.assigned_rep_id = cb_u.id
              WHERE l.id = ?`;
         const params = [id];
         if (orgId) {
@@ -130,9 +159,26 @@ export const Lead = {
         const whereSql = where.join(" AND ");
         const selected = columns.split(",").map((column) => `l.${column.trim()}`).join(", ");
         const rows = await query(
-            `SELECT ${selected}, u.fullName AS assigned_rep_name
+            `SELECT ${selected}, u.fullName AS assigned_rep_name,
+                    cb.id AS callback_id,
+                    cb.due_at AS callback_due_at,
+                    cb.status AS callback_status,
+                    cb.sla_status AS callback_sla_status,
+                    cb.notes AS callback_notes,
+                    cb_u.fullName AS callback_rep_name
              FROM ${table} l
              LEFT JOIN users u ON u.id = l.assigned_rep_id
+             LEFT JOIN (
+                 SELECT c1.id, c1.lead_id, c1.due_at, c1.status, c1.sla_status, c1.notes, c1.assigned_rep_id
+                 FROM callbacks c1
+                 INNER JOIN (
+                     SELECT lead_id, MAX(id) AS max_id
+                     FROM callbacks
+                     WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+                     GROUP BY lead_id
+                 ) c2 ON c1.id = c2.max_id
+             ) cb ON cb.lead_id = l.id
+             LEFT JOIN users cb_u ON cb.assigned_rep_id = cb_u.id
              WHERE ${whereSql}
              ORDER BY l.priority DESC, l.created_at DESC LIMIT ${safeLimit} OFFSET ${safeSkip}`,
             params

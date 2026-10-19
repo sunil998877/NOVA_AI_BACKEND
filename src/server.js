@@ -1,4 +1,4 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import http from "http";
 import { env } from "./config/env.js";
 import { connectDb } from "./config/db.js";

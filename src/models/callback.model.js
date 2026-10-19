@@ -7,24 +7,98 @@ const UPDATABLE = new Set(updatable);
 
 export const Callback = {
     async create(data) {
+        const orgId = Number(data.organization_id || 1);
+        const leadId = Number(data.lead_id);
+        const activeStatuses = ["OPEN", "SCHEDULED", "DUE", "IN_PROGRESS", "OVERDUE", "REQUESTED"];
+
+        const existingActive = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE organization_id = ? AND lead_id = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
+             ORDER BY due_at ASC LIMIT 1`,
+            [orgId, leadId, ...activeStatuses]
+        );
+
+        if (existingActive && existingActive.length > 0) {
+            const existing = existingActive[0];
+            const updates = {};
+            if (data.call_id && !existing.call_id) updates.call_id = Number(data.call_id);
+            if (data.notes && data.notes !== existing.notes) {
+                updates.notes = existing.notes ? `${existing.notes} | ${data.notes}` : data.notes;
+            }
+            if (data.due_at && new Date(data.due_at).getTime() !== new Date(existing.due_at).getTime()) {
+                updates.due_at = data.due_at;
+            }
+            if (Object.keys(updates).length > 0) {
+                await this.updateById(orgId, existing.id, updates);
+            }
+            const updatedRows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [existing.id]);
+            return mapRow(updatedRows[0]);
+        }
+
+        const dueAt = data.due_at ? new Date(data.due_at) : new Date(Date.now() + 30 * 60 * 1000);
+        const requestedAt = data.requested_at ? new Date(data.requested_at) : new Date();
+        const initialStatus = data.status || "OPEN";
+        const isPastDue = dueAt.getTime() < Date.now();
+        const slaStatus = isPastDue ? "BREACHED" : "ON_TRACK";
+        const slaBreachedAt = isPastDue ? new Date() : null;
+
         const result = await execute(
-            `INSERT INTO ${table} (organization_id, lead_id, assigned_rep_id, due_at, status, notes, source_event_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${table} (
+                organization_id, lead_id, call_id, assigned_rep_id, due_at, requested_at,
+                status, actual_outcome, follow_up_action, sla_status, sla_breached_at,
+                notes, source_event_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-                Number(data.organization_id),
-                Number(data.lead_id),
+                orgId,
+                leadId,
+                data.call_id ? Number(data.call_id) : null,
                 data.assigned_rep_id ? Number(data.assigned_rep_id) : null,
-                data.due_at,
-                data.status || "OPEN",
+                dueAt,
+                requestedAt,
+                initialStatus,
+                data.actual_outcome || null,
+                data.follow_up_action || null,
+                slaStatus,
+                slaBreachedAt,
                 data.notes || null,
                 data.source_event_id ? Number(data.source_event_id) : null,
             ]
         );
+
         const rows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [result.insertId]);
         return mapRow(rows[0]);
     },
 
-    async findById(orgId, id) {
+    async hasActiveCallback(arg1, arg2) {
+        const orgId = arg2 !== undefined ? Number(arg1) : 1;
+        const leadId = arg2 !== undefined ? Number(arg2) : Number(arg1);
+        const activeStatuses = ["OPEN", "SCHEDULED", "DUE", "IN_PROGRESS", "OVERDUE", "REQUESTED"];
+        const rows = await query(
+            `SELECT id FROM ${table}
+             WHERE organization_id = ? AND lead_id = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
+             LIMIT 1`,
+            [Number(orgId), Number(leadId), ...activeStatuses]
+        );
+        return Boolean(rows && rows.length > 0);
+    },
+
+    async updateSlaStatuses(orgId = 1) {
+        const result = await execute(
+            `UPDATE ${table}
+             SET sla_status = 'BREACHED',
+                 sla_breached_at = COALESCE(sla_breached_at, NOW())
+             WHERE organization_id = ?
+               AND status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
+               AND due_at < NOW()
+               AND sla_status != 'BREACHED'`,
+            [Number(orgId)]
+        );
+        return Number(result?.affectedRows || 0);
+    },
+
+    async findById(arg1, arg2) {
+        const orgId = arg2 !== undefined ? Number(arg1) : 1;
+        const id = arg2 !== undefined ? Number(arg2) : Number(arg1);
         const rows = await query(
             `SELECT c.*, l.name as lead_name, l.email as lead_email, l.phone as lead_phone, l.company as lead_company,
                     l.priority as priority, l.priority as lead_priority, l.health as lead_health, l.status as lead_status,
@@ -35,7 +109,7 @@ export const Callback = {
              WHERE c.organization_id = ? AND c.id = ? LIMIT 1`,
             [Number(orgId), Number(id)]
         );
-        return mapRow(rows[0]);
+        return rows[0] ? mapRow(rows[0]) : null;
     },
 
     async list(orgId, { status = "", assigned_rep_id = null, overdue = false, limit = 50, skip = 0 } = {}) {
@@ -53,7 +127,7 @@ export const Callback = {
             params.push(Number(assigned_rep_id));
         }
         if (overdue) {
-            where.push("c.status IN ('OPEN', 'IN_PROGRESS') AND c.due_at < NOW()");
+            where.push("c.status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED') AND c.due_at < NOW()");
         }
 
         const whereSql = where.join(" AND ");
@@ -72,8 +146,15 @@ export const Callback = {
         return rows.map(mapRow);
     },
 
-    async updateById(orgId, id, fields) {
-        const entries = Object.entries(fields).filter(
+    async update(arg1, arg2, arg3) {
+        return this.updateById(arg1, arg2, arg3);
+    },
+
+    async updateById(arg1, arg2, arg3) {
+        const orgId = arg3 !== undefined ? Number(arg1) : 1;
+        const id = arg3 !== undefined ? Number(arg2) : Number(arg1);
+        const fields = arg3 !== undefined ? arg3 : arg2;
+        const entries = Object.entries(fields || {}).filter(
             ([key, value]) => UPDATABLE.has(key) && value !== undefined
         );
         if (entries.length === 0) return this.findById(orgId, id);
@@ -89,6 +170,7 @@ export const Callback = {
     },
 
     async ensureHandoffQueue(orgId) {
+        const activeStatuses = ["OPEN", "SCHEDULED", "DUE", "IN_PROGRESS", "OVERDUE", "REQUESTED"];
         const leads = await query(
             `SELECT l.id, l.assigned_rep_id, l.callback_due, l.status
              FROM leads l
@@ -104,20 +186,34 @@ export const Callback = {
                     SELECT 1 FROM ${table} c
                     WHERE c.organization_id = l.organization_id
                       AND c.lead_id = l.id
-                      AND c.status IN ('OPEN', 'IN_PROGRESS', 'OVERDUE')
+                      AND c.status IN (${activeStatuses.map(() => "?").join(",")})
                )`,
-            [Number(orgId)]
+            [Number(orgId), ...activeStatuses]
         );
 
         for (const lead of leads) {
             const dueAt = lead.callback_due
                 ? new Date(lead.callback_due)
                 : new Date(Date.now() + 30 * 60 * 1000);
+
+            const recentCompleted = await query(
+                `SELECT id FROM ${table}
+                 WHERE organization_id = ? AND lead_id = ? AND status = 'COMPLETED'
+                   AND completed_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+                 LIMIT 1`,
+                [Number(orgId), Number(lead.id)]
+            );
+
+            if (recentCompleted && recentCompleted.length > 0 && !lead.callback_due) {
+                continue;
+            }
+
             await this.create({
                 organization_id: orgId,
                 lead_id: lead.id,
                 assigned_rep_id: lead.assigned_rep_id,
                 due_at: dueAt,
+                requested_at: new Date(),
                 status: dueAt.getTime() < Date.now() ? "OVERDUE" : "OPEN",
                 notes: "Human follow-up is waiting for this lead.",
             });
@@ -128,8 +224,8 @@ export const Callback = {
         const rows = await query(
             `SELECT 
                 COUNT(*) as total,
-                SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) as open_count,
-                SUM(CASE WHEN status IN ('OPEN', 'IN_PROGRESS') AND due_at < NOW() THEN 1 ELSE 0 END) as overdue_count,
+                SUM(CASE WHEN status IN ('OPEN', 'SCHEDULED', 'DUE', 'REQUESTED') AND due_at >= NOW() THEN 1 ELSE 0 END) as open_count,
+                SUM(CASE WHEN status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED') AND due_at < NOW() THEN 1 ELSE 0 END) as overdue_count,
                 SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count
              FROM ${table} WHERE organization_id = ?`,
             [Number(orgId)]

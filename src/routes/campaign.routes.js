@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { authenticate, authenticateUserOrN8n } from "../middleware/auth.middleware.js";
 import { listCampaigns } from "../controllers/Campaign/list.controller.js";
 import { getCampaign } from "../controllers/Campaign/get.controller.js";
@@ -13,6 +13,13 @@ import { addCampaignRecipients } from "../controllers/CampaignRecipient/add.cont
 import { removeCampaignRecipient } from "../controllers/CampaignRecipient/remove.controller.js";
 import { previewCampaign } from "../controllers/Campaign/preview.controller.js";
 import { getCampaignAnalytics } from "../controllers/Campaign/analytics.controller.js";
+import {
+    dryRunCampaign,
+    pauseCampaign,
+    resumeCampaign,
+    cancelCampaign,
+    getDeliveryStats,
+} from "../controllers/Campaign/campaignEngine.controller.js";
 
 const router = Router();
 
@@ -23,6 +30,11 @@ router.get("/:campaignId/recipients", authenticate, listCampaignRecipients);
 router.post("/:campaignId/recipients", authenticate, addCampaignRecipients);
 router.delete("/:campaignId/recipients/:contactId", authenticate, removeCampaignRecipient);
 router.post("/:campaignId/send", authenticate, sendCampaign);
+router.post("/:campaignId/dry-run", authenticate, dryRunCampaign);
+router.post("/:campaignId/pause", authenticate, pauseCampaign);
+router.post("/:campaignId/resume", authenticate, resumeCampaign);
+router.post("/:campaignId/cancel", authenticate, cancelCampaign);
+router.get("/:campaignId/delivery-stats", authenticate, getDeliveryStats);
 router.post("/:campaignId/complete", authenticateUserOrN8n, completeCampaign);
 router.patch("/:campaignId/status", authenticateUserOrN8n, updateCampaignStatus);
 router.get("/:id/preview", authenticate, previewCampaign);
