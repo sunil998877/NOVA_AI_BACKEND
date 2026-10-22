@@ -1,10 +1,17 @@
 
+
 class PresenceManager {
     constructor() {
+        
         this.userSockets = new Map();
+        
         this.socketUser = new Map();
     }
 
+    /**
+     * Register a new socket connection for a user.
+     * @returns {boolean}
+     */
     add(userId, socketId) {
         if (!userId || !socketId) return false;
         const key = String(userId);
@@ -13,14 +20,18 @@ class PresenceManager {
 
         if (!this.userSockets.has(key)) {
             this.userSockets.set(key, new Set([socketId]));
-            return true;
+            return true; // First connection -> user is now online
         }
 
         const sockets = this.userSockets.get(key);
         sockets.add(socketId);
-        return false;
+        return false; // Already online
     }
 
+    /**
+     * Remove a socket connection on disconnect.
+     * @returns {boolean} True if the user has no remaining sockets and is now offline.
+     */
     remove(socketId) {
         const userId = this.socketUser.get(socketId);
         if (!userId) return false;
@@ -34,7 +45,7 @@ class PresenceManager {
 
         if (sockets.size === 0) {
             this.userSockets.delete(userId);
-            return true;
+            return true; // Last connection closed -> user is now offline
         }
 
         return false;

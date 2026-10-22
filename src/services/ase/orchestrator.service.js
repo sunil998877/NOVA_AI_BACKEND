@@ -8,6 +8,7 @@ import { eventBus } from "./eventBus.service.js";
 import { aseDecisionEngine } from "./brain/aseDecisionEngine.service.js";
 import { decisionFeedbackService } from "./brain/decisionFeedback.service.js";
 import { query } from "../../config/db.js";
+import { followUpEngine } from "../followup/followUpEngine.service.js";
 
 const MAX_EMAILS = 3;
 const MAX_CALLS = 2;
@@ -130,6 +131,8 @@ export const OrchestratorService = {
                 status: transition.nextState,
                 payload: rawData,
             });
+
+            await followUpEngine.handleSuppression(lead.id, orgId).catch(() => {});
             return;
         }
 
@@ -159,14 +162,21 @@ export const OrchestratorService = {
             }
 
             const dueAt = new Date(Date.now() + 30 * 60 * 1000);
+            const callId = rawData.callId ? Number(rawData.callId) : (rawData.call_id ? Number(rawData.call_id) : null);
             const callback = await Callback.create({
                 organization_id: orgId,
                 lead_id: lead.id,
+                call_id: callId,
                 assigned_rep_id: assignedRepId,
                 due_at: dueAt,
+                requested_at: new Date(),
                 status: "OPEN",
                 notes: `Automated handoff: Prospect showed interest / requested callback.`,
             });
+
+            if (outcome === ASE_OUTCOMES.CALLBACK) {
+                await followUpEngine.handleMeetingBooked(lead.id, orgId).catch(() => {});
+            }
 
             await Lead.updateById(
                 lead.id,
@@ -184,7 +194,7 @@ export const OrchestratorService = {
             await eventBus.publish("ChannelOutcomeReceived", {
                 organization_id: orgId,
                 lead_id: lead.id,
-                channel: rawData.channel || "SYSTEM",
+                channel: rawData.channel || "VOICE",
                 outcome,
                 rawData,
             });
@@ -192,10 +202,11 @@ export const OrchestratorService = {
             await eventBus.publish("CallbackCreated", {
                 organization_id: orgId,
                 lead_id: lead.id,
-                channel: rawData.channel || "SYSTEM",
+                channel: "SYSTEM",
                 status: transition.nextState,
                 callback_id: callback.id,
                 due_at: dueAt,
+                call_id: callback.call_id,
                 rawData,
             });
             return;

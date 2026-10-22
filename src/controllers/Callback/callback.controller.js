@@ -2,6 +2,7 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { Callback } from "../../models/callback.model.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
+import { eventBus } from "../../services/ase/eventBus.service.js";
 
 export const listCallbacks = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
@@ -40,9 +41,23 @@ export const updateCallback = asyncHandler(async (req, res) => {
     if (req.body.assigned_rep_id !== undefined) updates.assigned_rep_id = req.body.assigned_rep_id;
     if (req.body.due_at) updates.due_at = req.body.due_at;
     if (req.body.notes) updates.notes = req.body.notes;
+    if (req.body.call_id) updates.call_id = Number(req.body.call_id);
+    if (req.body.actual_outcome || req.body.leadDisposition) {
+        updates.actual_outcome = req.body.actual_outcome || req.body.leadDisposition;
+    }
+    if (req.body.follow_up_action) updates.follow_up_action = req.body.follow_up_action;
 
-    if (req.body.status === "COMPLETED") {
+    const isCompleting = req.body.status === "COMPLETED";
+
+    if (isCompleting) {
         updates.completed_at = new Date();
+        const nowMs = Date.now();
+        const dueMs = existing.due_at ? new Date(existing.due_at).getTime() : nowMs;
+        const slaStatus = nowMs <= dueMs ? "MET" : "BREACHED";
+        updates.sla_status = slaStatus;
+        if (slaStatus === "BREACHED" && !existing.sla_breached_at) {
+            updates.sla_breached_at = new Date();
+        }
     }
 
     const updated = await Callback.updateById(orgId, req.params.id, updates);
@@ -52,17 +67,40 @@ export const updateCallback = asyncHandler(async (req, res) => {
         lead_id: existing.lead_id,
         user_id: req.user.id,
         channel: "SYSTEM",
-        event_type: updates.status === "COMPLETED" ? "CALLBACK_COMPLETED" : "CALLBACK_UPDATED",
+        event_type: isCompleting ? "CALLBACK_COMPLETED" : "CALLBACK_UPDATED",
         status: updates.status || existing.status,
-        payload: { callbackId: existing.id, updates },
+        payload: {
+            callbackId: existing.id,
+            callId: existing.call_id || updates.call_id,
+            slaStatus: updates.sla_status || existing.sla_status,
+            actualOutcome: updates.actual_outcome || existing.actual_outcome,
+            notes: updates.notes,
+            updates,
+        },
     });
 
-    if (req.body.status === "COMPLETED" && req.body.leadDisposition) {
+    if (isCompleting) {
+        await eventBus.publish("CallbackCompleted", {
+            organization_id: orgId,
+            lead_id: existing.lead_id,
+            channel: "SYSTEM",
+            status: "COMPLETED",
+            callback_id: existing.id,
+            call_id: existing.call_id || updates.call_id,
+            sla_status: updates.sla_status,
+            actual_outcome: updates.actual_outcome,
+        });
+    }
+
+    if (isCompleting && (req.body.leadDisposition || req.body.leadStatus)) {
         let finalStatus = req.body.leadStatus || "CONTACTED";
-        if (req.body.leadDisposition === "closed_won" || req.body.leadDisposition === "deal_won") {
+        const disp = req.body.leadDisposition || "";
+        if (disp === "closed_won" || disp === "deal_won") {
             finalStatus = "CLOSED_WON";
-        } else if (req.body.leadDisposition === "not_interested") {
+        } else if (disp === "not_interested" || disp === "closed_lost") {
             finalStatus = "CLOSED_LOST";
+        } else if (disp === "do_not_call" || disp === "dnc") {
+            finalStatus = "SUPPRESSED_DNC";
         } else if (req.body.nextCallbackDue) {
             finalStatus = "CALLBACK_SCHEDULED";
         }
@@ -70,10 +108,11 @@ export const updateCallback = asyncHandler(async (req, res) => {
         await Lead.updateById(
             existing.lead_id,
             {
-                disposition: req.body.leadDisposition,
+                disposition: disp || undefined,
                 status: finalStatus,
                 last_contacted_at: new Date(),
                 callback_due: req.body.nextCallbackDue ? new Date(req.body.nextCallbackDue) : null,
+                next_action: req.body.nextCallbackDue ? "REP_CALLBACK" : null,
             },
             orgId
         );
@@ -83,9 +122,11 @@ export const updateCallback = asyncHandler(async (req, res) => {
         await Callback.create({
             organization_id: orgId,
             lead_id: existing.lead_id,
+            call_id: existing.call_id || updates.call_id,
             assigned_rep_id: req.body.assigned_rep_id || existing.assigned_rep_id || req.user.id,
             due_at: new Date(req.body.nextCallbackDue),
-            status: "OPEN",
+            requested_at: new Date(),
+            status: "SCHEDULED",
             notes: req.body.nextCallbackNotes || `Follow-up scheduled after call with ${existing.lead_name || "lead"}.`,
         });
     }

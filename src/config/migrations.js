@@ -526,6 +526,53 @@ async function migrateAseFoundation(pool) {
     }
 }
 
+async function migrateTelephonyAndCallbacks(pool) {
+    try {
+        const [cbCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'callbacks'`
+        );
+        const cbColSet = new Set(cbCols.map((r) => r.COLUMN_NAME));
+
+        if (cbCols.length > 0) {
+            if (!cbColSet.has("call_id")) {
+                try {
+                    await pool.query("ALTER TABLE callbacks ADD COLUMN call_id INT NULL AFTER lead_id");
+                } catch (_) {}
+            }
+            if (!cbColSet.has("requested_at")) {
+                try {
+                    await pool.query("ALTER TABLE callbacks ADD COLUMN requested_at DATETIME NULL AFTER due_at");
+                } catch (_) {}
+            }
+            if (!cbColSet.has("actual_outcome")) {
+                try {
+                    await pool.query("ALTER TABLE callbacks ADD COLUMN actual_outcome VARCHAR(64) NULL AFTER status");
+                } catch (_) {}
+            }
+            if (!cbColSet.has("follow_up_action")) {
+                try {
+                    await pool.query("ALTER TABLE callbacks ADD COLUMN follow_up_action VARCHAR(64) NULL AFTER actual_outcome");
+                } catch (_) {}
+            }
+            if (!cbColSet.has("sla_status")) {
+                try {
+                    await pool.query("ALTER TABLE callbacks ADD COLUMN sla_status VARCHAR(32) NOT NULL DEFAULT 'ON_TRACK' AFTER follow_up_action");
+                } catch (_) {}
+            }
+            if (!cbColSet.has("sla_breached_at")) {
+                try {
+                    await pool.query("ALTER TABLE callbacks ADD COLUMN sla_breached_at DATETIME NULL AFTER sla_status");
+                } catch (_) {}
+            }
+            try {
+                await pool.query("ALTER TABLE callbacks MODIFY COLUMN status VARCHAR(32) NOT NULL DEFAULT 'OPEN'");
+            } catch (_) {}
+        }
+    } catch (err) {
+        console.warn("Telephony callback migration error:", err.message);
+    }
+}
 
 async function syncUsersToLeads(pool) {
     try {
@@ -563,6 +610,192 @@ async function syncUsersToLeads(pool) {
     }
 }
 
+async function migrateMukhStyleEmailEngine(pool) {
+    try {
+        const [campCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns'`
+        );
+        const existingCamp = new Set(campCols.map((c) => c.COLUMN_NAME));
+        if (!existingCamp.has("min_delay_seconds")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN min_delay_seconds INT NOT NULL DEFAULT 5 AFTER failed_count`);
+        }
+        if (!existingCamp.has("max_delay_seconds")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN max_delay_seconds INT NOT NULL DEFAULT 15 AFTER min_delay_seconds`);
+        }
+        if (!existingCamp.has("max_concurrency")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN max_concurrency INT NOT NULL DEFAULT 2 AFTER max_delay_seconds`);
+        }
+        if (!existingCamp.has("sending_window_start")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN sending_window_start VARCHAR(10) NOT NULL DEFAULT '08:00' AFTER max_concurrency`);
+        }
+        if (!existingCamp.has("sending_window_end")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN sending_window_end VARCHAR(10) NOT NULL DEFAULT '18:00' AFTER sending_window_start`);
+        }
+        if (!existingCamp.has("sending_days")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN sending_days JSON NULL AFTER sending_window_end`);
+        }
+        if (!existingCamp.has("timezone")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN timezone VARCHAR(64) NOT NULL DEFAULT 'UTC' AFTER sending_days`);
+        }
+        if (!existingCamp.has("daily_cap")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN daily_cap INT NOT NULL DEFAULT 500 AFTER timezone`);
+        }
+        if (!existingCamp.has("hourly_cap")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN hourly_cap INT NOT NULL DEFAULT 100 AFTER daily_cap`);
+        }
+        if (!existingCamp.has("sender_account_id")) {
+            await pool.query(`ALTER TABLE campaigns ADD COLUMN sender_account_id INT NULL AFTER hourly_cap`);
+        }
+
+        const [mailCols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mails'`
+        );
+        const existingMail = new Set(mailCols.map((c) => c.COLUMN_NAME));
+        if (!existingMail.has("idempotency_key")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN idempotency_key VARCHAR(128) NULL AFTER delivery_status`);
+        }
+        if (!existingMail.has("sender_account_id")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN sender_account_id INT NULL AFTER idempotency_key`);
+        }
+        if (!existingMail.has("scheduled_at")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN scheduled_at DATETIME NULL AFTER sender_account_id`);
+        }
+        if (!existingMail.has("locked_at")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN locked_at DATETIME NULL AFTER scheduled_at`);
+        }
+        if (!existingMail.has("locked_by")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN locked_by VARCHAR(64) NULL AFTER locked_at`);
+        }
+        if (!existingMail.has("attempts_count")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN attempts_count INT NOT NULL DEFAULT 0 AFTER locked_by`);
+        }
+        if (!existingMail.has("last_error")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN last_error TEXT NULL AFTER attempts_count`);
+        }
+        if (!existingMail.has("message_id")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN message_id VARCHAR(255) NULL AFTER last_error`);
+        }
+        if (!existingMail.has("skip_reason")) {
+            await pool.query(`ALTER TABLE mails ADD COLUMN skip_reason VARCHAR(128) NULL AFTER message_id`);
+        }
+    } catch (e) {
+        console.warn("[Migration] migrateMukhStyleEmailEngine warning:", e.message);
+    }
+}
+
+export async function migrateLeadEventIdempotency(pool) {
+    try {
+        const [cols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'lead_events'`
+        );
+        const colSet = new Set(cols.map((r) => r.COLUMN_NAME));
+        if (!colSet.has("idempotency_key")) {
+            await pool.query(`ALTER TABLE lead_events ADD COLUMN idempotency_key VARCHAR(255) NULL AFTER payload`);
+            try {
+                await pool.query(`ALTER TABLE lead_events ADD INDEX idx_le_idempotency (organization_id, idempotency_key)`);
+            } catch (_) {}
+        }
+    } catch (e) {
+        console.warn("[Migration] migrateLeadEventIdempotency warning:", e.message);
+    }
+}
+
+async function migrateFollowUpSequences(pool) {
+    try {
+        const [rows] = await pool.query(
+            `SELECT id FROM follow_up_sequences WHERE organization_id = 1 LIMIT 1`
+        );
+        if (!rows || rows.length === 0) {
+            const defaultSteps = [
+                {
+                    stepNumber: 1,
+                    dayOffset: 2,
+                    threadMode: "REPLY_THREAD",
+                    name: "Follow-up 1: Helpful in-thread touch",
+                    description: "Continue existing thread with concise, helpful problem inquiry. No calendar link.",
+                },
+                {
+                    stepNumber: 2,
+                    dayOffset: 7,
+                    threadMode: "NEW_THREAD",
+                    name: "Follow-up 2: Relevant insight & case study",
+                    description: "Start a new thread with a practical suggestion, metric, or industry observation.",
+                },
+                {
+                    stepNumber: 3,
+                    dayOffset: 14,
+                    threadMode: "NEW_THREAD",
+                    name: "Follow-up 3: Objection handling & resources",
+                    description: "Address likely hesitation, offer useful resource, invite questions.",
+                },
+                {
+                    stepNumber: 4,
+                    dayOffset: 28,
+                    threadMode: "NEW_THREAD",
+                    name: "Follow-up 4: Personalized video concept",
+                    description: "Custom video concept or tailored script draft for review.",
+                },
+                {
+                    stepNumber: 5,
+                    dayOffset: 42,
+                    threadMode: "REPLY_THREAD",
+                    name: "Follow-up 5: Polite final check-in",
+                    description: "Courteous final check-in, then pause the automated sequence.",
+                },
+            ];
+
+            await pool.query(
+                `INSERT INTO follow_up_sequences (
+                    organization_id, name, description, is_active, steps_config,
+                    sending_window_start, sending_window_end, sending_days, timezone
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    1,
+                    "Default Cold Outreach Sequence (5 Touches)",
+                    "Production-ready date-wise follow-up sequence: Day 2, Day 7, Day 14, Day 28, Day 42.",
+                    1,
+                    JSON.stringify(defaultSteps),
+                    "09:00",
+                    "18:00",
+                    JSON.stringify([1, 2, 3, 4, 5]),
+                    "UTC",
+                ]
+            );
+        }
+
+        try {
+            await pool.query(`ALTER TABLE follow_up_enrollments MODIFY COLUMN status VARCHAR(64) NOT NULL DEFAULT 'active'`);
+        } catch (_) {}
+
+        try {
+            await pool.query(`ALTER TABLE follow_up_tasks MODIFY COLUMN status VARCHAR(64) NOT NULL DEFAULT 'SCHEDULED'`);
+        } catch (_) {}
+
+        const alterations = [
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_message_id VARCHAR(255) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_subject VARCHAR(255) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_outcome VARCHAR(64) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_received_at DATETIME NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_processed_at DATETIME NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_processed_by VARCHAR(128) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN resumed_at DATETIME NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN resumed_by VARCHAR(128) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN resumed_reason VARCHAR(255) NULL",
+        ];
+
+        for (const alterSql of alterations) {
+            try {
+                await pool.query(alterSql);
+            } catch (_) {}
+        }
+    } catch (error) {
+        console.warn("[Migration] migrateFollowUpSequences warning:", error.message);
+    }
+}
+
 export async function runMigrations(pool) {
     for (const statement of tableStatements) {
         try {
@@ -584,7 +817,12 @@ export async function runMigrations(pool) {
         migrateCollaborationChatTables(pool),
         migrateChatSchema(pool),
         migrateAseFoundation(pool),
+        migrateTelephonyAndCallbacks(pool),
         syncUsersToLeads(pool),
+        migrateMukhStyleEmailEngine(pool),
+        migrateLeadEventIdempotency(pool),
+        migrateFollowUpSequences(pool),
     ]);
 }
+
 

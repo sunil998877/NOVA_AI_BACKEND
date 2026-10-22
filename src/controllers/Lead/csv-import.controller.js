@@ -53,6 +53,7 @@ export const importCsv = asyncHandler(async (req, res) => {
         userId: req.user.id,
         source: LEAD_SOURCES.CSV,
         updateExisting: Boolean(req.body.updateExisting),
+        matchDomain: false,
     });
     return res.status(200).json({ data: summary });
 });

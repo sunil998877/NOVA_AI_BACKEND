@@ -70,6 +70,7 @@ class EventBusService extends EventEmitter {
 
         try {
             if (envelope.lead_id) {
+                const idempotencyKey = options.idempotency_key || options.idempotencyKey || envelope.event_id || null;
                 await LeadEvent.create({
                     organization_id: envelope.organization_id,
                     lead_id: envelope.lead_id,
@@ -77,6 +78,7 @@ class EventBusService extends EventEmitter {
                     event_type: eventType,
                     status: envelope.status || undefined,
                     payload: envelope.payload,
+                    idempotency_key: idempotencyKey,
                 });
             }
         } catch (dbErr) {

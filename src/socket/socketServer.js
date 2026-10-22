@@ -5,6 +5,7 @@ import { registerChatHandlers } from "./chatHandlers.js";
 
 let ioInstance = null;
 
+
 export function initSocketServer(httpServer) {
     if (ioInstance) return ioInstance;
 
@@ -29,12 +30,7 @@ export function initSocketServer(httpServer) {
                         allowed === normalized ||
                         allowed === origin ||
                         normalized.includes("localhost") ||
-                        normalized.includes("127.0.0.1") ||
-                        normalized.endsWith(".onrender.com") ||
-                        normalized.includes("onrender.com") ||
-                        normalized.endsWith(".vercel.app") ||
-                        normalized.includes("vercel.app") ||
-                        normalized.endsWith(".hostingersite.com")
+                        normalized.includes("127.0.0.1")
                 );
                 if (matched || env.nodeEnv !== "production") {
                     return callback(null, true);
@@ -47,11 +43,13 @@ export function initSocketServer(httpServer) {
         transports: ["websocket", "polling"],
         pingTimeout: 20000,
         pingInterval: 25000,
-        maxHttpBufferSize: 1e6,
+        maxHttpBufferSize: 1e6
     });
 
+  
     io.use(socketAuth);
 
+    
     io.on("connection", (socket) => {
         registerChatHandlers(io, socket);
     });
@@ -60,6 +58,7 @@ export function initSocketServer(httpServer) {
     console.log("[Socket.IO] Real-time chat server initialized successfully");
     return io;
 }
+
 
 export function getIo() {
     return ioInstance;

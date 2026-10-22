@@ -25,6 +25,22 @@ export const decisionAuditService = {
                 }
             }
 
+            let normalizedProbabilities = null;
+            if (prediction?.probabilities && typeof prediction.probabilities === "object") {
+                const entries = Object.entries(prediction.probabilities)
+                    .filter(([_, v]) => typeof v === "number" && Number.isFinite(v) && v >= 0);
+                const sum = entries.reduce((acc, [_, v]) => acc + v, 0);
+                if (sum > 0) {
+                    normalizedProbabilities = Object.fromEntries(
+                        entries.map(([k, v]) => [k, Math.round((v / sum) * 1000) / 1000])
+                    );
+                }
+            }
+
+            const confVal = typeof decision.confidence === "number" && Number.isFinite(decision.confidence)
+                ? (decision.confidence > 1 ? decision.confidence / 100 : decision.confidence)
+                : null;
+
             await LeadEvent.create({
                 organization_id: orgId,
                 lead_id: lead.id,
@@ -34,11 +50,12 @@ export const decisionAuditService = {
                 payload: {
                     action: decision.recommendedAction,
                     delayHours: decision.delayHours,
-                    confidence: decision.confidence,
-                    isAssistedByMl: decision.isAssistedByMl,
+                    confidence: confVal,
+                    isAssistedByMl: Boolean(decision.isAssistedByMl),
                     reasonCode: decision.reasonCode,
                     reasonSummary: explanation.summary,
                     reasonCodes: explanation.reasonCodes,
+                    probabilities: normalizedProbabilities,
                     shadowPrediction: decision.shadowPrediction || null,
                     modelVersion: prediction?.modelVersion || "rules-only",
                     conversionProbability: conversionPrediction?.probability ?? null,
