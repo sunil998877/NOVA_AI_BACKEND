@@ -5,6 +5,7 @@ import { OrchestratorService } from "../ase/orchestrator.service.js";
 import { enqueueCompanyOutreach } from "./outreachQueue.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { query } from "../../config/db.js";
+import { followUpEngine } from "../followup/followUpEngine.service.js";
 
 export const LEAD_SOURCES = Object.freeze({
     API: "API",
@@ -171,6 +172,10 @@ export async function processLead(rawLead, options = {}) {
         domain,
         suppressedCache,
         existingCache,
+        autoEnroll: options.autoEnroll,
+        campaignId: options.campaignId,
+        sequenceId: options.sequenceId,
+        sentAt: options.sentAt,
     }));
 }
 
@@ -183,6 +188,10 @@ async function ingestLockedLead(data, {
     domain,
     suppressedCache,
     existingCache,
+    autoEnroll,
+    campaignId,
+    sequenceId,
+    sentAt,
 }) {
 
     let isSuppressed = false;
@@ -333,6 +342,21 @@ async function ingestLockedLead(data, {
 
     if (emailAllowed) {
         enqueueCompanyOutreach({ ...lead, organization_id: organizationId, user_id: userId });
+    }
+
+    if (!isSuppressed && !doNotContact && autoEnroll !== false) {
+        try {
+            await followUpEngine.autoEnrollLead(lead, {
+                organizationId,
+                userId,
+                source,
+                campaignId: campaignId || data.campaignId || data.campaign_id || null,
+                sequenceId: sequenceId || data.sequenceId || data.sequence_id || null,
+                sentAt: sentAt || data.sentAt || data.sent_at || null,
+            });
+        } catch (enrollErr) {
+            console.error("[LeadIntake] Auto-enrollment error:", enrollErr.message);
+        }
     }
 
     return {

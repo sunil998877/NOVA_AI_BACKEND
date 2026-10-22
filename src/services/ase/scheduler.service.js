@@ -10,6 +10,8 @@ import { OrchestratorService } from "./orchestrator.service.js";
 import { validateDispatchEligibility } from "./complianceGate.service.js";
 import { transitionLeadState } from "./leadStateMachine.js";
 import { eventBus } from "./eventBus.service.js";
+import { followUpEngine } from "../followup/followUpEngine.service.js";
+import { followUpScheduler } from "../followup/followUpScheduler.service.js";
 
 class AseScheduler {
     constructor() {
@@ -63,6 +65,7 @@ class AseScheduler {
             await this.autoQueueNewLeads();
             await this.executeDueActions();
             await this.checkOverdueCallbacks();
+            await followUpScheduler.processDueTasks().catch(() => {});
         } catch (error) {
             console.error("[ASE Scheduler] Error during cycle:", error.message);
         } finally {
@@ -314,6 +317,13 @@ class AseScheduler {
                     status: result.status,
                     metadata: result.metadata || { error: result.error },
                 });
+
+                await followUpEngine.enrollLead(freshLead, {
+                    sentAt: new Date(),
+                    subject: result.metadata?.subject,
+                    messageId: result.metadata?.messageId,
+                    research: result.metadata?.research,
+                }).catch(() => {});
 
                 if (stateTransition.changed) {
                     await eventBus.publish("LeadStateChanged", {

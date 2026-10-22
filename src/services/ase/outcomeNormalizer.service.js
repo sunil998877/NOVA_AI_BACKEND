@@ -250,6 +250,28 @@ export function normalizeChannelOutcome(channel, rawResponse = {}) {
     const intent = String(rawResponse.detectedIntent || rawResponse.intent || "").toLowerCase();
     const disposition = String(rawResponse.disposition || rawResponse.status || "").toLowerCase();
     const text = String(rawResponse.transcript || rawResponse.body || rawResponse.reply || "").toLowerCase();
+    const subject = String(rawResponse.subject || "").toLowerCase();
+
+    if (
+        intent.includes("ooo") ||
+        intent.includes("out_of_office") ||
+        disposition.includes("ooo") ||
+        text.includes("out of office") ||
+        text.includes("automatic reply") ||
+        text.includes("auto-reply") ||
+        text.includes("autoreply") ||
+        text.includes("away from my desk") ||
+        text.includes("on vacation") ||
+        text.includes("annual leave") ||
+        text.includes("currently away") ||
+        text.includes("i am out of the office") ||
+        text.includes("i will be out") ||
+        subject.includes("out of office") ||
+        subject.includes("automatic reply") ||
+        subject.includes("auto-reply")
+    ) {
+        return ASE_OUTCOMES.OOO;
+    }
 
     if (
         disposition.includes("dnc") ||

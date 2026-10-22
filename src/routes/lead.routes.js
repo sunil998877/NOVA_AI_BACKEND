@@ -4,7 +4,7 @@ import { authenticate } from "../middleware/auth.middleware.js";
 import { authenticateLeadApi } from "../middleware/leadApiKey.middleware.js";
 import { ingestLeadsFromApi } from "../controllers/Lead/api-intake.controller.js";
 import { importCsv, previewCsv } from "../controllers/Lead/csv-import.controller.js";
-import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps } from "../controllers/Lead/manage.controller.js";
+import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail } from "../controllers/Lead/manage.controller.js";
 import { getLeadDecision, getLeadConversionPrediction, getBrainStatus, updateBrainMode, getBrainEvaluation } from "../controllers/Lead/brain.controller.js";
 
 const router = Router();
@@ -37,6 +37,7 @@ router.get("/:id/decision", authenticate, getLeadDecision);
 router.get("/:id/conversion-prediction", authenticate, getLeadConversionPrediction);
 router.get("/:id", authenticate, getLead);
 router.post("/:id/execute", authenticate, executeLeadAction);
+router.post("/:id/draft-email", authenticate, draftLeadEmail);
 router.patch("/:id", authenticate, updateLead);
 router.delete("/:id", authenticate, deleteLead);
 

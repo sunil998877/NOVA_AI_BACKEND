@@ -18,7 +18,7 @@
     "tunnel": "ngrok http 3001"
   },
   "dependencies": {
-    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs": "^2.1.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -31,7 +31,7 @@
     "mailparser": "^3.9.40",
     "marked": "^18.0.11",
     "mysql2": "^3.24.2",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^10.1.7",
     "onnxruntime-node": "^1.30.0",
     "openai": "^7.5.0",
     "socket.io": "^4.8.3",
@@ -39,6 +39,6 @@
     "xstate": "^5.33.2"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^1.14.10"
   }
 }

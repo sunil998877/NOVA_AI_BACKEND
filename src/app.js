@@ -19,6 +19,7 @@ import callbackRoutes from "./routes/callback.routes.js";
 import suppressionRoutes from "./routes/suppression.routes.js";
 import aseVoiceRoutes from "./routes/ase-voice.routes.js";
 import senderAccountRoutes from "./routes/sender-account.routes.js";
+import followUpRoutes from "./routes/followUp.routes.js";
 import { handleN8nChatEvent } from "./controllers/Webhook/n8n-chat.controller.js";
 import { runAseIntegrationTests } from "./tests/ase_integration.test.js";
 import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
@@ -144,6 +145,7 @@ app.use("/api/callbacks", callbackRoutes);
 app.use("/api/suppressions", suppressionRoutes);
 app.use("/api/engine/voice", aseVoiceRoutes);
 app.use("/api/sender-accounts", senderAccountRoutes);
+app.use("/api/follow-ups", followUpRoutes);
 app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
 
 app.all("/api/engine/check-email-replies", async (_req, res) => {

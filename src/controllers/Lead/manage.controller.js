@@ -9,6 +9,7 @@ import { MAX_BATCH } from "../../services/leads/leadIntake.service.js";
 import { aseScheduler } from "../../services/ase/scheduler.service.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { query } from "../../config/db.js";
+import { draftCompanyPersonalizedEmail } from "../../services/ase/leadEmailDrafter.service.js";
 
 const TERMINAL_STATES = new Set(["CLOSED_WON", "CLOSED_LOST", "CLOSED_UNQUALIFIED", "SUPPRESSED_DNC"]);
 
@@ -49,6 +50,13 @@ export const updateLead = asyncHandler(async (req, res) => {
     const updates = { ...req.body };
     const oldStatus = lead.status;
     const newStatus = updates.status;
+
+    if (updates.metadata && typeof updates.metadata === "object") {
+        updates.metadata = {
+            ...(lead.metadata || {}),
+            ...updates.metadata,
+        };
+    }
 
     if (updates.do_not_contact) {
         updates.status = "SUPPRESSED_DNC";
@@ -203,5 +211,42 @@ export const listTeamReps = asyncHandler(async (req, res) => {
         [orgId]
     );
     return res.status(200).json({ data: rows });
+});
+
+export const draftLeadEmail = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    const lead = await Lead.findById(req.params.id, orgId);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+    const drafted = await draftCompanyPersonalizedEmail(lead, req.body || {});
+    const existing = lead.metadata || {};
+    const metadata = {
+        ...existing,
+        company_research: existing.company_research || drafted.research,
+        outreach_status: "ready",
+        outreach_email: {
+            subject: drafted.subject,
+            text: drafted.text,
+            html: drafted.html,
+            written_at: new Date().toISOString(),
+        },
+    };
+
+    const updated = await Lead.updateById(lead.id, { metadata }, orgId);
+
+    await LeadEvent.create({
+        organization_id: orgId,
+        lead_id: lead.id,
+        user_id: req.user.id || null,
+        channel: "EMAIL",
+        event_type: "EMAIL_DRAFTED",
+        status: "COMPLETED",
+        payload: {
+            subject: drafted.subject,
+            company: drafted.research?.company || lead.company,
+        },
+    });
+
+    return res.status(200).json({ data: { lead: updated, email: metadata.outreach_email } });
 });
 

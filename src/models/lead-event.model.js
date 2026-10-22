@@ -22,23 +22,53 @@ const toEvent = (row) => {
 };
 
 export const LeadEvent = {
-    async create({ organization_id, lead_id, user_id = null, channel = "SYSTEM", event_type, status = null, payload = null, created_at = new Date() }) {
-        const result = await execute(
-            `INSERT INTO ${table} (organization_id, lead_id, user_id, channel, event_type, status, payload, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                Number(organization_id),
-                Number(lead_id),
-                user_id ? Number(user_id) : null,
-                channel,
-                event_type,
-                status,
-                payload ? JSON.stringify(payload) : null,
-                created_at,
-            ]
-        );
-        const rows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [result.insertId]);
-        return toEvent(rows[0]);
+    async create({ organization_id, lead_id, user_id = null, channel = "SYSTEM", event_type, status = null, payload = null, idempotency_key = null, created_at = new Date() }) {
+        const orgId = Number(organization_id);
+        const lId = Number(lead_id);
+        const safeKey = idempotency_key ? String(idempotency_key).trim() : null;
+
+        if (safeKey) {
+            try {
+                const existing = await query(
+                    `SELECT ${columns} FROM ${table} WHERE organization_id = ? AND idempotency_key = ? LIMIT 1`,
+                    [orgId, safeKey]
+                );
+                if (existing && existing.length > 0) {
+                    return toEvent(existing[0]);
+                }
+            } catch (_) {}
+        }
+
+        try {
+            const result = await execute(
+                `INSERT INTO ${table} (organization_id, lead_id, user_id, channel, event_type, status, payload, idempotency_key, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    orgId,
+                    lId,
+                    user_id ? Number(user_id) : null,
+                    channel,
+                    event_type,
+                    status,
+                    payload ? JSON.stringify(payload) : null,
+                    safeKey,
+                    created_at,
+                ]
+            );
+            const rows = await query(`SELECT ${columns} FROM ${table} WHERE id = ? LIMIT 1`, [result.insertId]);
+            return toEvent(rows[0]);
+        } catch (error) {
+            if (safeKey && (error.code === "ER_DUP_ENTRY" || error.errno === 1062)) {
+                const existing = await query(
+                    `SELECT ${columns} FROM ${table} WHERE organization_id = ? AND idempotency_key = ? LIMIT 1`,
+                    [orgId, safeKey]
+                );
+                if (existing && existing.length > 0) {
+                    return toEvent(existing[0]);
+                }
+            }
+            throw error;
+        }
     },
 
     async listByLead(orgId, leadId, limit = 100) {

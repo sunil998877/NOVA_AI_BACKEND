@@ -8,6 +8,7 @@ import { eventBus } from "./eventBus.service.js";
 import { aseDecisionEngine } from "./brain/aseDecisionEngine.service.js";
 import { decisionFeedbackService } from "./brain/decisionFeedback.service.js";
 import { query } from "../../config/db.js";
+import { followUpEngine } from "../followup/followUpEngine.service.js";
 
 const MAX_EMAILS = 3;
 const MAX_CALLS = 2;
@@ -130,6 +131,8 @@ export const OrchestratorService = {
                 status: transition.nextState,
                 payload: rawData,
             });
+
+            await followUpEngine.handleSuppression(lead.id, orgId).catch(() => {});
             return;
         }
 
@@ -170,6 +173,10 @@ export const OrchestratorService = {
                 status: "OPEN",
                 notes: `Automated handoff: Prospect showed interest / requested callback.`,
             });
+
+            if (outcome === ASE_OUTCOMES.CALLBACK) {
+                await followUpEngine.handleMeetingBooked(lead.id, orgId).catch(() => {});
+            }
 
             await Lead.updateById(
                 lead.id,

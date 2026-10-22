@@ -685,6 +685,117 @@ async function migrateMukhStyleEmailEngine(pool) {
     }
 }
 
+export async function migrateLeadEventIdempotency(pool) {
+    try {
+        const [cols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'lead_events'`
+        );
+        const colSet = new Set(cols.map((r) => r.COLUMN_NAME));
+        if (!colSet.has("idempotency_key")) {
+            await pool.query(`ALTER TABLE lead_events ADD COLUMN idempotency_key VARCHAR(255) NULL AFTER payload`);
+            try {
+                await pool.query(`ALTER TABLE lead_events ADD INDEX idx_le_idempotency (organization_id, idempotency_key)`);
+            } catch (_) {}
+        }
+    } catch (e) {
+        console.warn("[Migration] migrateLeadEventIdempotency warning:", e.message);
+    }
+}
+
+async function migrateFollowUpSequences(pool) {
+    try {
+        const [rows] = await pool.query(
+            `SELECT id FROM follow_up_sequences WHERE organization_id = 1 LIMIT 1`
+        );
+        if (!rows || rows.length === 0) {
+            const defaultSteps = [
+                {
+                    stepNumber: 1,
+                    dayOffset: 2,
+                    threadMode: "REPLY_THREAD",
+                    name: "Follow-up 1: Helpful in-thread touch",
+                    description: "Continue existing thread with concise, helpful problem inquiry. No calendar link.",
+                },
+                {
+                    stepNumber: 2,
+                    dayOffset: 7,
+                    threadMode: "NEW_THREAD",
+                    name: "Follow-up 2: Relevant insight & case study",
+                    description: "Start a new thread with a practical suggestion, metric, or industry observation.",
+                },
+                {
+                    stepNumber: 3,
+                    dayOffset: 14,
+                    threadMode: "NEW_THREAD",
+                    name: "Follow-up 3: Objection handling & resources",
+                    description: "Address likely hesitation, offer useful resource, invite questions.",
+                },
+                {
+                    stepNumber: 4,
+                    dayOffset: 28,
+                    threadMode: "NEW_THREAD",
+                    name: "Follow-up 4: Personalized video concept",
+                    description: "Custom video concept or tailored script draft for review.",
+                },
+                {
+                    stepNumber: 5,
+                    dayOffset: 42,
+                    threadMode: "REPLY_THREAD",
+                    name: "Follow-up 5: Polite final check-in",
+                    description: "Courteous final check-in, then pause the automated sequence.",
+                },
+            ];
+
+            await pool.query(
+                `INSERT INTO follow_up_sequences (
+                    organization_id, name, description, is_active, steps_config,
+                    sending_window_start, sending_window_end, sending_days, timezone
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    1,
+                    "Default Cold Outreach Sequence (5 Touches)",
+                    "Production-ready date-wise follow-up sequence: Day 2, Day 7, Day 14, Day 28, Day 42.",
+                    1,
+                    JSON.stringify(defaultSteps),
+                    "09:00",
+                    "18:00",
+                    JSON.stringify([1, 2, 3, 4, 5]),
+                    "UTC",
+                ]
+            );
+        }
+
+        try {
+            await pool.query(`ALTER TABLE follow_up_enrollments MODIFY COLUMN status VARCHAR(64) NOT NULL DEFAULT 'active'`);
+        } catch (_) {}
+
+        try {
+            await pool.query(`ALTER TABLE follow_up_tasks MODIFY COLUMN status VARCHAR(64) NOT NULL DEFAULT 'SCHEDULED'`);
+        } catch (_) {}
+
+        const alterations = [
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_message_id VARCHAR(255) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_subject VARCHAR(255) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_outcome VARCHAR(64) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_received_at DATETIME NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_processed_at DATETIME NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN reply_processed_by VARCHAR(128) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN resumed_at DATETIME NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN resumed_by VARCHAR(128) NULL",
+            "ALTER TABLE follow_up_enrollments ADD COLUMN resumed_reason VARCHAR(255) NULL",
+        ];
+
+        for (const alterSql of alterations) {
+            try {
+                await pool.query(alterSql);
+            } catch (_) {}
+        }
+    } catch (error) {
+        console.warn("[Migration] migrateFollowUpSequences warning:", error.message);
+    }
+}
+
 export async function runMigrations(pool) {
     for (const statement of tableStatements) {
         try {
@@ -709,6 +820,9 @@ export async function runMigrations(pool) {
         migrateTelephonyAndCallbacks(pool),
         syncUsersToLeads(pool),
         migrateMukhStyleEmailEngine(pool),
+        migrateLeadEventIdempotency(pool),
+        migrateFollowUpSequences(pool),
     ]);
 }
+
 

@@ -31,13 +31,24 @@ export const Suppression = {
         return rows.length > 0 ? mapRow(rows[0]) : false;
     },
 
-    async add(orgId, type, value, reason = "DNC request") {
-        const cleanVal = String(value).trim().toLowerCase();
+    async add(orgId, typeOrPayload, value = null, reason = "DNC request") {
+        let type = typeOrPayload;
+        let cleanVal = value;
+        let rsn = reason;
+
+        if (typeof typeOrPayload === "object" && typeOrPayload !== null) {
+            type = typeOrPayload.type || "EMAIL";
+            cleanVal = typeOrPayload.email || typeOrPayload.value || typeOrPayload.phone;
+            rsn = typeOrPayload.reason || reason;
+        }
+
+        if (!cleanVal) return false;
+        const normalizedVal = String(cleanVal).trim().toLowerCase();
         await execute(
             `INSERT INTO ${table} (organization_id, type, value, reason)
              VALUES (?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE reason = VALUES(reason)`,
-            [Number(orgId), type.toUpperCase(), cleanVal, reason]
+            [Number(orgId), String(type).toUpperCase(), normalizedVal, rsn]
         );
         return true;
     },

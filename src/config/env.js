@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const parseOrigins = (value) => {
     const defaultOrigins = [
@@ -108,6 +108,14 @@ export const env = {
         user: process.env.SMTP_USER || "",
         pass: process.env.SMTP_PASS || "",
         from: (process.env.EMAIL_FROM || process.env.SMTP_USER || "").replace(/^["']|["']$/g, ""),
+    },
+    imap: {
+        host: process.env.IMAP_HOST || (process.env.SMTP_HOST ? process.env.SMTP_HOST.replace(/^smtp\./i, "imap.") : "imap.hostinger.com"),
+        port: Number(process.env.IMAP_PORT || 993),
+        secure: process.env.IMAP_SECURE !== "false",
+        user: process.env.IMAP_USER || process.env.SMTP_USER || "nova@evokeaisolutions.com",
+        pass: process.env.IMAP_PASS || process.env.SMTP_PASS || "Nova@1200",
+        enabled: process.env.IMAP_ENABLED !== "false",
     },
     novaSenderEmail: (process.env.NOVA_SENDER_EMAIL || "nova@yourdomain.com").replace(/^["']|["']$/g, "").trim(),
     novaSenderName: (process.env.NOVA_SENDER_NAME || "NOVA AI").replace(/^["']|["']$/g, "").trim(),

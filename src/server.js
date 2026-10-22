@@ -1,4 +1,9 @@
-﻿import "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config({ quiet: true });
+import dns from "dns";
+if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder("ipv4first");
+}
 import http from "http";
 import { env } from "./config/env.js";
 import { connectDb } from "./config/db.js";
@@ -7,6 +12,7 @@ import { initSocketServer } from "./socket/socketServer.js";
 import { aseScheduler } from "./services/ase/scheduler.service.js";
 import { ensureMlService, stopMlService } from "./services/ase/brain/mlServiceProcess.js";
 import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
+import { followUpScheduler } from "./services/followup/followUpScheduler.service.js";
 
 
 const startServer = () => {
@@ -33,11 +39,13 @@ const startServer = () => {
     process.on("SIGINT", () => {
         stopMlService();
         emailReplyListener.stop();
+        followUpScheduler.stop();
         process.exit(0);
     });
     process.on("SIGTERM", () => {
         stopMlService();
         emailReplyListener.stop();
+        followUpScheduler.stop();
         process.exit(0);
     });
 
@@ -45,6 +53,7 @@ const startServer = () => {
         .then(() => {
             aseScheduler.start();
             emailReplyListener.start();
+            followUpScheduler.start();
         })
         .catch((err) => {
             console.error("Initial database connection error:", err.message);
