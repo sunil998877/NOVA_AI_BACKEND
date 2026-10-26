@@ -1,6 +1,39 @@
+import { lookup, Resolver } from "dns/promises";
 import mysql from "mysql2/promise";
 import { env } from "./env.js";
 import { runMigrations } from "./migrations.js";
+
+const isIpv4 = (value) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(String(value || ""));
+
+async function resolveMysqlHost(hostname) {
+    if (!hostname || isIpv4(hostname)) {
+        return { address: hostname, servername: hostname };
+    }
+
+    try {
+        const { address } = await lookup(hostname, { family: 4 });
+        return { address, servername: hostname };
+    } catch (lookupError) {
+        const resolver = new Resolver();
+        resolver.setServers(["8.8.8.8", "1.1.1.1"]);
+        const addresses = await resolver.resolve4(hostname);
+        if (!addresses[0]) {
+            const error = new Error(`Could not resolve MySQL host '${hostname}'`);
+            error.code = lookupError.code || "ENOTFOUND";
+            throw error;
+        }
+        console.warn(
+            `[MySQL] System DNS failed for ${hostname} (${lookupError.code || lookupError.message}). Connecting via ${addresses[0]}.`
+        );
+        return { address: addresses[0], servername: hostname };
+    }
+}
+
+function shouldUseSsl(hostname) {
+    if (process.env.MYSQL_SSL === "false" || process.env.MYSQL_SSL === "0") return false;
+    if (process.env.MYSQL_SSL === "true" || process.env.MYSQL_SSL === "1") return true;
+    return /\.aivencloud\.com$/i.test(String(hostname || ""));
+}
 
 let pool;
 
@@ -32,9 +65,11 @@ export const connectDb = async () => {
     const { host, port, user, password, database } = env.mysql;
 
     try {
-        if (host === "127.0.0.1" || host === "localhost") {
+        const resolved = await resolveMysqlHost(host);
+
+        if (resolved.address === "127.0.0.1" || host === "localhost") {
             try {
-                const bootstrap = await mysql.createConnection({ host, port, user, password });
+                const bootstrap = await mysql.createConnection({ host: resolved.address, port, user, password });
                 await bootstrap.query(
                     `CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
                 );
@@ -45,7 +80,7 @@ export const connectDb = async () => {
         }
 
         const poolConfig = {
-            host,
+            host: resolved.address,
             port,
             user,
             password,
@@ -58,8 +93,11 @@ export const connectDb = async () => {
             connectTimeout: 20000,
         };
 
-        if (process.env.MYSQL_SSL === "true") {
-            poolConfig.ssl = { rejectUnauthorized: false };
+        if (shouldUseSsl(host)) {
+            poolConfig.ssl = {
+                rejectUnauthorized: false,
+                servername: resolved.servername,
+            };
         }
 
         pool = mysql.createPool(poolConfig);
@@ -79,9 +117,9 @@ export const connectDb = async () => {
         } else if (error.code === "ENOTFOUND" || error.code === "EAI_FAIL") {
             console.error(
                 `\n[MySQL Connection Guide]: Could not resolve host '${host}'.\n` +
-                "• 'mysql.railway.internal' only resolves INSIDE Railway containers (not on local machines).\n" +
-                "• For local development, go to Railway Dashboard -> MySQL -> Settings -> Public Networking (TCP Proxy).\n" +
-                "• Copy the public domain (e.g. *.proxy.rlwy.net) and public port, or copy MYSQL_PUBLIC_URL.\n"
+                "• Check MYSQL_HOST in Backend/.env.\n" +
+                "• Aiven hosts look like *.aivencloud.com and need a reachable public DNS.\n" +
+                "• Railway internal hosts (mysql.railway.internal) only resolve inside Railway.\n"
             );
         }
         setTimeout(() => {

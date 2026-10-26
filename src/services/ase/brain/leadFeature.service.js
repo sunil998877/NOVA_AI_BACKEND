@@ -1,15 +1,46 @@
+import { buildScaledFeatureVector, deriveModelSignals } from "./featureSchema.js";
+
+function parseJson(value, fallback) {
+    if (!value) return fallback;
+    if (typeof value === "object") return value;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return fallback;
+    }
+}
+
+function readEngagementCounts(lead) {
+    const metadata = parseJson(lead.metadata, {});
+    const tracking = parseJson(lead.tracking, {});
+    return {
+        emailOpens: Number(
+            lead.email_opens
+            ?? lead.opens_count
+            ?? metadata.email_opens
+            ?? metadata.opens_count
+            ?? tracking.opens
+            ?? 0
+        ),
+        linkClicks: Number(
+            lead.link_clicks
+            ?? lead.clicks_count
+            ?? metadata.link_clicks
+            ?? metadata.clicks_count
+            ?? tracking.clicks
+            ?? 0
+        ),
+    };
+}
+
 export const leadFeatureService = {
     extractFeatures(lead) {
         if (!lead) return null;
 
-        const counters = typeof lead.attempt_counters === "string"
-            ? JSON.parse(lead.attempt_counters || "{}")
-            : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
-
+        const counters = parseJson(lead.attempt_counters, { email: 0, voice: 0, total: 0 });
         const emailAttempts = Number(counters.email || 0);
         const voiceAttempts = Number(counters.voice || 0);
-        const emailOpens = Number(lead.email_opens || lead.opens_count || 0);
-        const linkClicks = Number(lead.link_clicks || lead.clicks_count || 0);
+        const { emailOpens, linkClicks } = readEngagementCounts(lead);
 
         let hoursSinceLastTouch = 999;
         if (lead.last_contacted_at) {
@@ -19,7 +50,8 @@ export const leadFeatureService = {
 
         let engagementScore = Number(lead.engagement_score || 0);
         if (!lead.engagement_score) {
-            engagementScore = Math.min(100, (emailOpens * 15) + (linkClicks * 35));
+            const verifiedWeight = (Number(linkClicks) * 35) + (Number(emailOpens) * 8);
+            engagementScore = Math.min(100, verifiedWeight);
             if (hoursSinceLastTouch > 72 && engagementScore > 0) {
                 engagementScore = Math.max(5, engagementScore * 0.8);
             }
@@ -29,17 +61,15 @@ export const leadFeatureService = {
         }
 
         const emailConsentAllowed = lead.email_consent?.status !== "DENIED" && Boolean(lead.email);
-        const voiceConsentAllowed = lead.voice_consent?.status !== "DENIED" && Boolean(lead.phone);
-
-        const vector = new Float32Array([
-            emailOpens,
-            linkClicks,
+        const voiceConsentAllowed = lead.voice_consent?.status === "GRANTED" && Boolean(lead.phone);
+        const signals = deriveModelSignals({
+            emailAttempts,
             voiceAttempts,
-            Number(hoursSinceLastTouch.toFixed(1)),
-            Number(engagementScore.toFixed(1)),
-        ]);
-
-        return {
+            linkClicks,
+            hoursSinceLastTouch,
+            status: lead.status,
+        });
+        const features = {
             leadId: lead.id,
             organizationId: Number(lead.organization_id || 1),
             emailOpens,
@@ -52,7 +82,12 @@ export const leadFeatureService = {
             voiceConsentAllowed,
             priority: Number(lead.priority || 50),
             status: lead.status || "NEW",
-            vector,
+            recentClick: signals.recentClick,
+            highIntent: signals.highIntent,
+            fatigue: Number(signals.fatigue.toFixed(3)),
+            featureSchemaVersion: "v2.0",
         };
+        features.vector = buildScaledFeatureVector(features);
+        return features;
     },
 };

@@ -73,7 +73,7 @@ const parseMysqlConfig = () => {
 };
 
 export const env = {
-    port: Number(process.env.PORT || 3000),
+    port: Number(process.env.PORT || 3001),
     nodeEnv: process.env.NODE_ENV || "development",
     mysql: parseMysqlConfig(),
     jwtSecret: process.env.JWT_SECRET || "NOVA_AI_JWT_SECRET_9f7K2mP4xL8vQ6sR3tY5nW1aZ0cD8eF7",
@@ -128,6 +128,21 @@ export const env = {
     leadsApiUserId: (process.env.LEADS_API_USER_ID || "1").trim(),
     leadsApiOrgId: Number(process.env.LEADS_API_ORG_ID || 1),
     aseMlUrl: (process.env.ASE_ML_URL || "http://127.0.0.1:8091").trim(),
+    autoCallOnEmailOpen: process.env.ASE_AUTO_CALL_ON_OPEN !== "false" && process.env.ASE_AUTO_CALL_ON_OPEN !== "0",
+    autoCallDelaySeconds: Number(process.env.ASE_AUTO_CALL_DELAY_SECONDS || 30),
+    autoCallReviewMode: process.env.ASE_AUTO_CALL_REVIEW_MODE === "true" || process.env.ASE_AUTO_CALL_REVIEW_MODE === "1",
+    allowBotOpenCall: process.env.ASE_ALLOW_BOT_OPEN_CALL === "true",
+    callingHoursStart: Number(process.env.ASE_CALLING_HOURS_START || 9),
+    callingHoursEnd: Number(process.env.ASE_CALLING_HOURS_END || 20),
+    callingTimezone: process.env.ASE_CALLING_TIMEZONE || "Asia/Kolkata",
+    bypassTimingGates: process.env.ASE_BYPASS_TIMING_GATES === "true"
+        || process.env.ASE_BYPASS_TIMING_GATES === "1"
+        || (
+            process.env.ASE_BYPASS_TIMING_GATES !== "false"
+            && process.env.NODE_ENV !== "production"
+            && process.env.NODE_ENV !== "test"
+            && typeof process.env.NODE_TEST_CONTEXT === "undefined"
+        ),
 };
 
 if (env.nodeEnv === "production") {

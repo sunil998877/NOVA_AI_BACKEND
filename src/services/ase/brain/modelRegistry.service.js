@@ -25,15 +25,19 @@ class ModelRegistry {
             }
         }
 
+        const version = metadata?.version || "1.0.0";
         return {
             mode: this.mode,
             isModelAvailable: modelExists,
             modelPath: this.modelPath,
-            version: metadata?.version || "1.0.0",
+            version,
+            activeModel: modelExists ? `lead_next_action@${version}` : null,
             accuracy: metadata?.accuracy ?? null,
             totalSamples: metadata?.total_samples ?? null,
             updatedAt: metadata?.updated_at || null,
             features: metadata?.features || [],
+            featureSchemaVersion: metadata?.feature_schema_version || "v2.0",
+            dataSource: metadata?.data_source || null,
             classes: metadata?.classes || { 0: "EMAIL", 1: "CALL", 2: "WAIT" },
         };
     }

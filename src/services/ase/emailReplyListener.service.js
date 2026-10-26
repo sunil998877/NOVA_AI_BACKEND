@@ -8,6 +8,7 @@ import { LeadEvent } from "../../models/lead-event.model.js";
 import { FollowUpEnrollment } from "../../models/follow-up-enrollment.model.js";
 import { OrchestratorService } from "./orchestrator.service.js";
 import { normalizeChannelOutcome, ASE_OUTCOMES } from "./outcomeNormalizer.service.js";
+import { classifyInteractionIntent } from "./brain/intentClassification.service.js";
 import { getIo } from "../../socket/socketServer.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
 
@@ -159,16 +160,29 @@ class EmailReplyListenerService {
             return { success: false, reason: "PLACEHOLDER_CREDENTIALS" };
         }
 
+        let resolvedHost = config.host;
         try {
-            await dns.promises.lookup(config.host, { family: 4 });
-        } catch (dnsErr) {
-            this.logError("DNS", `Cannot resolve IMAP host '${config.host}': ${dnsErr.message}`);
-            this.isPolling = false;
-            return { success: false, reason: "DNS_RESOLUTION_FAILED" };
+            await dns.promises.lookup(resolvedHost, { family: 4 });
+        } catch (_) {
+            let altResolved = false;
+            const alternatives = ["imap.titan.email", "mail.hostinger.com"];
+            for (const alt of alternatives) {
+                try {
+                    await dns.promises.lookup(alt, { family: 4 });
+                    resolvedHost = alt;
+                    altResolved = true;
+                    break;
+                } catch (_) {}
+            }
+            if (!altResolved) {
+                this.logError("DNS", `Cannot resolve IMAP host '${config.host}'. Check internet connection or IMAP_HOST.`);
+                this.isPolling = false;
+                return { success: false, reason: "DNS_RESOLUTION_FAILED" };
+            }
         }
 
         const client = new ImapFlow({
-            host: config.host,
+            host: resolvedHost,
             port: config.port,
             secure: config.secure,
             auth: {
@@ -188,6 +202,9 @@ class EmailReplyListenerService {
         });
 
         this.currentClient = client;
+        client.on("error", (err) => {
+            this.logError("CONNECTION", err?.message || "IMAP connection error");
+        });
         let processedCount = 0;
 
         try {
@@ -344,11 +361,14 @@ class EmailReplyListenerService {
         if (!lead) return null;
         const orgId = Number(lead.organization_id || 1);
 
-        const outcome = normalizeChannelOutcome("EMAIL", {
-            reply: body,
-            transcript: body,
-            subject,
-        });
+        const classification = classifyInteractionIntent(body, { channel: "EMAIL", subject });
+        const outcome = classification.intent === "unsubscribe_or_dnc"
+            ? ASE_OUTCOMES.DNC
+            : (classification.outcome || normalizeChannelOutcome("EMAIL", {
+                reply: body,
+                transcript: body,
+                subject,
+            }));
 
         await OrchestratorService.handleOutcomeEvent(lead, outcome, {
             channel: "EMAIL",
@@ -357,30 +377,29 @@ class EmailReplyListenerService {
             from: cleanFrom,
             messageId,
             receivedAt: (date instanceof Date ? date : new Date(date)).toISOString(),
+            intent: classification,
         });
 
         let enrollment = match.enrollment;
         if (!enrollment) {
             enrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
         }
-        if (enrollment) {
-            try {
-                await followUpEngine.handleLeadReply(
-                    lead,
-                    {
-                        outcome,
-                        subject,
-                        replyText: body,
-                        messageId,
-                        inReplyTo,
-                        references,
-                        date,
-                    },
-                    enrollment
-                );
-            } catch (err) {
-                this.logError("FOLLOWUP", `Error handling follow-up lead reply: ${err.message}`);
-            }
+        try {
+            await followUpEngine.handleLeadReply(
+                lead,
+                {
+                    outcome,
+                    subject,
+                    replyText: body,
+                    messageId,
+                    inReplyTo,
+                    references,
+                    date,
+                },
+                enrollment || null
+            );
+        } catch (err) {
+            this.logError("FOLLOWUP", `Error handling follow-up lead reply: ${err.message}`);
         }
 
         if (outcome === ASE_OUTCOMES.DNC) {

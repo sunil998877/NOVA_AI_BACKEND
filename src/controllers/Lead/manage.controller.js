@@ -35,11 +35,40 @@ export const listLeads = asyncHandler(async (req, res) => {
 
 export const getLead = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
-    const lead = await Lead.findById(req.params.id, orgId);
+    let lead = await Lead.findById(req.params.id, orgId);
+    if (!lead) {
+        lead = await Lead.findById(req.params.id);
+    }
+    if (!lead) {
+        const callbackRows = await query(
+            `SELECT c.*, u.fullName as rep_name FROM callbacks c LEFT JOIN users u ON c.assigned_rep_id = u.id WHERE c.lead_id = ? OR c.id = ? LIMIT 1`,
+            [req.params.id, req.params.id]
+        );
+        if (callbackRows && callbackRows.length > 0) {
+            const cb = callbackRows[0];
+            lead = {
+                id: Number(req.params.id),
+                name: "Prospective Client",
+                company: null,
+                phone: null,
+                email: null,
+                status: "CALLBACK_SCHEDULED",
+                priority: 50,
+                health: "GREEN",
+                callback: {
+                    id: cb.id,
+                    due_at: cb.due_at,
+                    status: cb.status,
+                    notes: cb.notes,
+                    rep_name: cb.rep_name,
+                },
+            };
+        }
+    }
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
-    const timeline = await LeadEvent.listByLead(orgId, lead.id, 100);
-    return res.status(200).json({ data: { lead, timeline } });
+    const timeline = await LeadEvent.listByLead(orgId, lead.id, 100).catch(() => []);
+    return res.status(200).json({ data: { lead, timeline: timeline || [] } });
 });
 
 export const updateLead = asyncHandler(async (req, res) => {
@@ -172,41 +201,56 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
     if (lead.do_not_contact) return res.status(400).json({ error: "Lead is suppressed (Do Not Contact)" });
     if (TERMINAL_STATES.has(lead.status)) return res.status(400).json({ error: "Lead is in a terminal state" });
 
-    if (!lead.next_action) {
+    const startedAt = Date.now();
+    const validActions = new Set(["EMAIL", "CALL"]);
+    let action = validActions.has(lead.next_action) ? lead.next_action : null;
+
+    if (!action) {
         const decision = await OrchestratorService.evaluateNextAction(lead);
-        let action = decision?.action;
+        action = decision?.action && validActions.has(decision.action) ? decision.action : null;
         if (!action) {
             const counters = typeof lead.attempt_counters === "string"
                 ? JSON.parse(lead.attempt_counters || "{}")
                 : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
-            if (counters.email === 0 && lead.email && lead.email_consent?.status !== "DENIED") {
+            if (lead.email && counters.email < 3 && lead.email_consent?.status !== "DENIED") {
                 action = "EMAIL";
             } else if (lead.phone && counters.voice < 2 && lead.voice_consent?.status !== "DENIED") {
                 action = "CALL";
-            } else if (lead.email && counters.email < 3 && lead.email_consent?.status !== "DENIED") {
-                action = "EMAIL";
             }
         }
         if (!action) {
-            return res.status(400).json({ error: decision?.reason || "No eligible action to execute" });
+            return res.status(400).json({ error: "No eligible action to execute" });
         }
-        lead = await Lead.updateById(lead.id, {
-            next_action: action,
-            next_action_time: new Date(),
-        }, orgId);
     }
 
-    await aseScheduler.processLeadAction(lead);
+    lead = await Lead.updateById(lead.id, {
+        next_action: action,
+        next_action_time: new Date(),
+    }, orgId);
+
+    const result = await aseScheduler.processLeadAction(lead, { force: true });
     const updated = await Lead.findById(lead.id, orgId);
-    return res.status(200).json({ data: { lead: updated, executed: true } });
+    const elapsedMs = Date.now() - startedAt;
+
+    if (!result?.executed) {
+        return res.status(400).json({
+            error: result?.reason || "Execution did not complete",
+            data: { lead: updated, executed: false, elapsedMs },
+        });
+    }
+
+    console.log(`[ASE] Execute Now completed for lead ${lead.id} action=${result.action} in ${elapsedMs}ms`);
+    return res.status(200).json({
+        data: { lead: updated, executed: true, action: result.action, elapsedMs },
+    });
 });
 
 export const listTeamReps = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
     const rows = await query(
-        `SELECT id, fullName, email, role 
-         FROM users 
-         WHERE organization_id = ? OR organization_id IS NULL
+        `SELECT id, fullName, email, role
+         FROM users
+         WHERE organization_id = ?
          ORDER BY (role = 'SALESPERSON' OR role = 'SALES_MANAGER') DESC, fullName ASC`,
         [orgId]
     );

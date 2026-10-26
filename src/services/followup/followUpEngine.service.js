@@ -11,6 +11,20 @@ import { followUpScheduler } from "./followUpScheduler.service.js";
 import { getIo } from "../../socket/socketServer.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { ASE_OUTCOMES } from "../ase/outcomeNormalizer.service.js";
+import { env } from "../../config/env.js";
+import { unifiedDeliveryService } from "../email/unifiedDelivery.service.js";
+
+function resolveReplyOutcome(raw) {
+    if (!raw) return ASE_OUTCOMES.AMBIGUOUS;
+    if (typeof raw === "string") return raw;
+    return raw.normalizedOutcome || raw.outcome || ASE_OUTCOMES.AMBIGUOUS;
+}
+
+function shouldSkipReplySend() {
+    return process.env.ASE_SKIP_OUTREACH === "1"
+        || process.env.NODE_ENV === "test"
+        || typeof process.env.NODE_TEST_CONTEXT !== "undefined";
+}
 
 const DEFAULT_SCHEDULE = [
     { stepNumber: 1, dayOffset: 2, threadMode: "REPLY_THREAD" },
@@ -20,31 +34,88 @@ const DEFAULT_SCHEDULE = [
     { stepNumber: 5, dayOffset: 42, threadMode: "REPLY_THREAD" },
 ];
 
-export function calculateScheduledDate(initialSentAt, dayOffset, config = {}) {
-    const baseDate = new Date(initialSentAt);
-    const targetDate = new Date(baseDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+const WEEKDAY = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-    const allowedDays = config.sending_days && Array.isArray(config.sending_days) ? config.sending_days : [1, 2, 3, 4, 5];
+function resolveFollowUpTimezone(config = {}) {
+    if (config.timezone && config.timezone !== "UTC") return config.timezone;
+    return env.callingTimezone || "Asia/Kolkata";
+}
+
+function getZonedParts(date, timeZone) {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        weekday: "short",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+    });
+    const map = {};
+    for (const part of formatter.formatToParts(date)) {
+        map[part.type] = part.value;
+    }
+    return {
+        weekday: WEEKDAY[map.weekday] ?? 0,
+        year: Number(map.year),
+        month: Number(map.month),
+        day: Number(map.day),
+        hour: Number(map.hour === "24" ? 0 : map.hour),
+        minute: Number(map.minute),
+        second: Number(map.second),
+    };
+}
+
+function addCalendarDays(year, month, day, days) {
+    const utc = new Date(Date.UTC(year, month - 1, day + Number(days || 0)));
+    return {
+        year: utc.getUTCFullYear(),
+        month: utc.getUTCMonth() + 1,
+        day: utc.getUTCDate(),
+        weekday: utc.getUTCDay(),
+    };
+}
+
+function zonedTimeToUtc(timeZone, year, month, day, hour, minute) {
+    const utcGuess = Date.UTC(year, month - 1, day, hour, minute, 0);
+    const got = getZonedParts(new Date(utcGuess), timeZone);
+    const gotUtc = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute, 0);
+    return new Date(utcGuess + (utcGuess - gotUtc));
+}
+
+export function calculateScheduledDate(initialSentAt, dayOffset, config = {}) {
+    const timeZone = resolveFollowUpTimezone(config);
+    const bypassDays = env.bypassTimingGates && typeof process.env.NODE_TEST_CONTEXT === "undefined";
+    const allowedDays = bypassDays
+        ? [0, 1, 2, 3, 4, 5, 6]
+        : (config.sending_days && Array.isArray(config.sending_days) ? config.sending_days : [1, 2, 3, 4, 5]);
     const windowStartHour = config.sending_window_start ? parseInt(config.sending_window_start.split(":")[0], 10) : 9;
     const windowStartMin = config.sending_window_start ? parseInt(config.sending_window_start.split(":")[1] || "0", 10) : 0;
     const windowEndHour = config.sending_window_end ? parseInt(config.sending_window_end.split(":")[0], 10) : 18;
+    const base = getZonedParts(new Date(initialSentAt), timeZone);
+    let cursor = addCalendarDays(base.year, base.month, base.day, dayOffset);
 
-    while (!allowedDays.includes(targetDate.getUTCDay())) {
-        targetDate.setUTCDate(targetDate.getUTCDate() + 1);
+    while (!allowedDays.includes(cursor.weekday)) {
+        cursor = addCalendarDays(cursor.year, cursor.month, cursor.day, 1);
     }
 
-    const currentHour = targetDate.getUTCHours();
-    if (currentHour < windowStartHour) {
-        targetDate.setUTCHours(windowStartHour, windowStartMin, 0, 0);
-    } else if (currentHour >= windowEndHour) {
-        targetDate.setUTCDate(targetDate.getUTCDate() + 1);
-        while (!allowedDays.includes(targetDate.getUTCDay())) {
-            targetDate.setUTCDate(targetDate.getUTCDate() + 1);
+    let hour = base.hour;
+    let minute = base.minute;
+    if (hour < windowStartHour) {
+        hour = windowStartHour;
+        minute = windowStartMin;
+    } else if (hour >= windowEndHour) {
+        cursor = addCalendarDays(cursor.year, cursor.month, cursor.day, 1);
+        while (!allowedDays.includes(cursor.weekday)) {
+            cursor = addCalendarDays(cursor.year, cursor.month, cursor.day, 1);
         }
-        targetDate.setUTCHours(windowStartHour, windowStartMin, 0, 0);
+        hour = windowStartHour;
+        minute = windowStartMin;
     }
 
-    return targetDate;
+    return zonedTimeToUtc(timeZone, cursor.year, cursor.month, cursor.day, hour, minute);
 }
 
 export const followUpEngine = {
@@ -132,6 +203,11 @@ export const followUpEngine = {
 
         const result = await this.enrollLead(lead, initialContext);
         if (result && result.enrollment) {
+            const enrolledSteps = (result.tasks || []).map((task) => ({
+                stepNumber: task.step_number,
+                dayOffset: task.day_offset,
+                scheduledAt: task.scheduled_at,
+            }));
             await LeadEvent.create({
                 organization_id: orgId,
                 lead_id: lead.id,
@@ -142,6 +218,7 @@ export const followUpEngine = {
                     enrollmentId: result.enrollment.id,
                     totalSteps: result.tasks?.length || 5,
                     firstScheduledAt: result.tasks?.[0]?.scheduled_at,
+                    scheduledSteps: enrolledSteps,
                 },
                 idempotency_key: `lead_${lead.id}_auto_enrolled_${result.enrollment.id}`,
             });
@@ -209,7 +286,10 @@ export const followUpEngine = {
             const dayOffset = Number(step.dayOffset !== undefined ? step.dayOffset : step.day_offset);
             const threadMode = step.threadMode || step.thread_mode || (stepNum === 1 || stepNum === 5 ? "REPLY_THREAD" : "NEW_THREAD");
 
-            const scheduledAt = calculateScheduledDate(initialSentAt, dayOffset, sequence);
+            const scheduledAt = calculateScheduledDate(initialSentAt, dayOffset, {
+                ...sequence,
+                timezone: sequence.timezone || env.callingTimezone,
+            });
             const content = await followUpContentService.generateStepContent(stepNum, lead, {
                 subject: initialSubject,
                 messageId: initialMessageId,
@@ -238,6 +318,18 @@ export const followUpEngine = {
             createdTasks.push(task);
         }
 
+        const firstFollowUpAt = createdTasks[0]?.scheduled_at;
+        if (firstFollowUpAt && lead.next_action !== "CALL") {
+            await Lead.updateById(
+                lead.id,
+                {
+                    next_action: "EMAIL",
+                    next_action_time: firstFollowUpAt,
+                },
+                orgId
+            );
+        }
+
         await LeadEvent.create({
             organization_id: orgId,
             lead_id: lead.id,
@@ -251,6 +343,11 @@ export const followUpEngine = {
                 totalSteps: steps.length,
                 initialSentAt: initialSentAt.toISOString(),
                 firstScheduledAt: createdTasks[0]?.scheduled_at,
+                scheduledSteps: createdTasks.map((task) => ({
+                    stepNumber: task.step_number,
+                    dayOffset: task.day_offset,
+                    scheduledAt: task.scheduled_at,
+                })),
             },
             idempotency_key: `lead_${lead.id}_enroll_${enrollment.id}`,
         });
@@ -354,14 +451,16 @@ export const followUpEngine = {
         if (!lead || !lead.id) return null;
         const orgId = Number(lead.organization_id || 1);
         const enrollment = matchedEnrollment || await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
-        if (!enrollment) return null;
-
-        const outcome = replyPayload.outcome || "OUTCOME_AMBIGUOUS";
+        const outcome = resolveReplyOutcome(replyPayload.outcome);
         const replySubject = replyPayload.subject || "Reply received";
         const replyText = replyPayload.replyText || replyPayload.body || "";
         const messageId = replyPayload.messageId || null;
 
-        if (outcome === ASE_OUTCOMES.OOO) {
+        if (!enrollment && (outcome === ASE_OUTCOMES.OOO || outcome === ASE_OUTCOMES.DNC || outcome === ASE_OUTCOMES.CALLBACK)) {
+            return null;
+        }
+
+        if (enrollment && outcome === ASE_OUTCOMES.OOO) {
             await FollowUpEnrollment.markOutOfOffice(enrollment.id, { messageId, subject: replySubject, date: replyPayload.date }, orgId);
             await query(
                 `UPDATE follow_up_tasks SET scheduled_at = DATE_ADD(scheduled_at, INTERVAL 5 DAY)
@@ -377,7 +476,7 @@ export const followUpEngine = {
                 event_type: "FOLLOW_UP_PAUSED",
                 status: "PAUSED",
                 payload: {
-                    enrollmentId: enrollment.id,
+                    enrollmentId: enrollment?.id || null,
                     reason: "Out-of-office response detected; sequence paused and tasks deferred by 5 days",
                     outcome: "OUTCOME_OOO",
                     messageId,
@@ -388,7 +487,7 @@ export const followUpEngine = {
             return { paused: true, status: "paused_out_of_office", enrollmentId: enrollment.id };
         }
 
-        if (outcome === ASE_OUTCOMES.DNC) {
+        if (enrollment && outcome === ASE_OUTCOMES.DNC) {
             await FollowUpEnrollment.markDoNotContact(enrollment.id, "Prospect requested DNC / unsubscribe", orgId);
             await FollowUpTask.cancelRemaining(enrollment.id, "Prospect opted out / DNC", "CANCELLED", orgId);
 
@@ -421,7 +520,7 @@ export const followUpEngine = {
                 event_type: "FOLLOW_UP_STOPPED",
                 status: "CANCELLED",
                 payload: {
-                    enrollmentId: enrollment.id,
+                    enrollmentId: enrollment?.id || null,
                     reason: "Prospect requested DNC / unsubscribe; outreach terminated across all campaigns",
                     outcome: "OUTCOME_DNC",
                 },
@@ -431,7 +530,7 @@ export const followUpEngine = {
             return { stopped: true, status: "stopped_do_not_contact", enrollmentId: enrollment.id };
         }
 
-        if (outcome === ASE_OUTCOMES.CALLBACK) {
+        if (enrollment && outcome === ASE_OUTCOMES.CALLBACK) {
             await FollowUpEnrollment.markMeetingBooked(enrollment.id, orgId);
             await FollowUpTask.cancelRemaining(enrollment.id, "Sales meeting or call requested", "CANCELLED", orgId);
 
@@ -443,7 +542,7 @@ export const followUpEngine = {
                 event_type: "FOLLOW_UP_STOPPED",
                 status: "COMPLETED",
                 payload: {
-                    enrollmentId: enrollment.id,
+                    enrollmentId: enrollment?.id || null,
                     reason: "Sales call requested; promotional sequence stopped",
                     outcome: "OUTCOME_CALLBACK",
                 },
@@ -453,21 +552,26 @@ export const followUpEngine = {
             return { stopped: true, status: "stopped_meeting_booked", enrollmentId: enrollment.id };
         }
 
-        await FollowUpEnrollment.markReplied(
-            enrollment.id,
-            { messageId, subject: replySubject, outcome, date: replyPayload.date },
-            orgId
-        );
-
-        await FollowUpTask.blockRemainingForReply(enrollment.id, `Prospect reply received (${outcome})`, orgId);
+        if (enrollment) {
+            await FollowUpEnrollment.markReplied(
+                enrollment.id,
+                { messageId, subject: replySubject, outcome, date: replyPayload.date },
+                orgId
+            );
+            await FollowUpTask.blockRemainingForReply(enrollment.id, `Prospect reply received (${outcome})`, orgId);
+        }
 
         let draft = null;
-        if (outcome === ASE_OUTCOMES.INTERESTED) {
+        let sent = null;
+        const shouldReply = outcome !== ASE_OUTCOMES.DNC && outcome !== ASE_OUTCOMES.OOO;
+        if (shouldReply) {
             draft = await followUpContentService.generateResponseDraft(lead, {
                 subject: replySubject,
                 replyText,
             }, {
-                subject: enrollment.initial_subject,
+                subject: enrollment?.initial_subject,
+                senderName: env.novaSenderName || "NOVA AI",
+                research: lead.metadata?.company_research,
             });
 
             await LeadEvent.create({
@@ -478,44 +582,102 @@ export const followUpEngine = {
                 event_type: "AI_RESPONSE_DRAFTED",
                 status: "DRAFT",
                 payload: {
-                    enrollmentId: enrollment.id,
+                    enrollmentId: enrollment?.id || null,
                     subject: draft.subject,
                     bodyText: draft.text,
                     bodyHtml: draft.html,
                 },
-                idempotency_key: `lead_${lead.id}_response_draft_${enrollment.id}_${messageId || Date.now()}`,
+                idempotency_key: `lead_${lead.id}_response_draft_${enrollment?.id || "none"}_${messageId || Date.now()}`,
             });
+
+            if (!shouldSkipReplySend() && lead.email && draft?.subject && (draft.text || draft.html)) {
+                try {
+                    const headers = {};
+                    if (messageId) {
+                        headers["In-Reply-To"] = messageId;
+                        headers["References"] = messageId;
+                    }
+                    const delivery = await unifiedDeliveryService.deliverSingle({
+                        orgId,
+                        to: lead.email,
+                        subject: draft.subject,
+                        text: draft.text,
+                        html: draft.html,
+                        headers,
+                        leadId: lead.id,
+                        idempotencyKey: `reply_response_${orgId}_${lead.id}_${messageId || Date.now()}`,
+                    });
+                    sent = delivery;
+                    await LeadEvent.create({
+                        organization_id: orgId,
+                        lead_id: lead.id,
+                        user_id: lead.user_id || null,
+                        channel: "EMAIL",
+                        event_type: delivery.status === "SUCCEEDED" ? "AI_RESPONSE_SENT" : "AI_RESPONSE_FAILED",
+                        status: delivery.status === "SUCCEEDED" ? "SENT" : "FAILED",
+                        payload: {
+                            enrollmentId: enrollment?.id || null,
+                            subject: draft.subject,
+                            bodyText: draft.text,
+                            bodyHtml: draft.html,
+                            messageId: delivery.messageId || null,
+                            error: delivery.error || delivery.skipReason || null,
+                            replyTo: messageId,
+                        },
+                        idempotency_key: `lead_${lead.id}_response_sent_${enrollment?.id || "none"}_${messageId || Date.now()}`,
+                    });
+                } catch (err) {
+                    await LeadEvent.create({
+                        organization_id: orgId,
+                        lead_id: lead.id,
+                        channel: "EMAIL",
+                        event_type: "AI_RESPONSE_FAILED",
+                        status: "FAILED",
+                        payload: { enrollmentId: enrollment?.id || null, subject: draft.subject, error: err.message },
+                    }).catch(() => {});
+                }
+            }
         }
 
-        await LeadEvent.create({
-            organization_id: orgId,
-            lead_id: lead.id,
-            user_id: lead.user_id || null,
-            channel: "EMAIL",
-            event_type: "FOLLOW_UP_PAUSED",
-            status: "PAUSED",
-            payload: {
-                enrollmentId: enrollment.id,
-                reason: `Prospect replied to outreach (${outcome}); automated follow-ups blocked pending review`,
-                replySubject,
-                outcome,
-                hasDraft: Boolean(draft),
-            },
-            idempotency_key: `lead_${lead.id}_reply_pause_${enrollment.id}_${messageId || Date.now()}`,
-        });
-
-        const io = getIo();
-        if (io) {
-            io.emit("followup:paused", {
-                leadId: lead.id,
-                enrollmentId: enrollment.id,
-                status: "paused_reply_received",
-                outcome,
-                hasDraft: Boolean(draft),
+        if (enrollment) {
+            await LeadEvent.create({
+                organization_id: orgId,
+                lead_id: lead.id,
+                user_id: lead.user_id || null,
+                channel: "EMAIL",
+                event_type: "FOLLOW_UP_PAUSED",
+                status: "PAUSED",
+                payload: {
+                    enrollmentId: enrollment.id,
+                    reason: `Prospect replied to outreach (${outcome}); automated follow-ups blocked pending review`,
+                    replySubject,
+                    outcome,
+                    hasDraft: Boolean(draft),
+                    sent: sent?.status === "SUCCEEDED",
+                },
+                idempotency_key: `lead_${lead.id}_reply_pause_${enrollment.id}_${messageId || Date.now()}`,
             });
+
+            const io = getIo();
+            if (io) {
+                io.emit("followup:paused", {
+                    leadId: lead.id,
+                    enrollmentId: enrollment.id,
+                    status: "paused_reply_received",
+                    outcome,
+                    hasDraft: Boolean(draft),
+                    sent: sent?.status === "SUCCEEDED",
+                });
+            }
         }
 
-        return { paused: true, status: "paused_reply_received", enrollmentId: enrollment.id, draft };
+        return {
+            paused: Boolean(enrollment),
+            status: enrollment ? "paused_reply_received" : "reply_handled",
+            enrollmentId: enrollment?.id || null,
+            draft,
+            sent: sent?.status === "SUCCEEDED",
+        };
     },
 
     async handleMeetingBooked(leadId, orgId = 1) {

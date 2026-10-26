@@ -211,7 +211,9 @@ export function normalizeTelephonyOutcome(raw = {}) {
                 speechResult.includes("interested") ||
                 speechResult.includes("sounds good") ||
                 speechResult.includes("tell me more") ||
-                speechResult.includes("send details")
+                speechResult.includes("send details") ||
+                speechResult.includes("demo") ||
+                speechResult.includes("schedule")
             ) {
                 outcome = ASE_OUTCOMES.INTERESTED;
                 disposition = "interested";
@@ -281,7 +283,11 @@ export function normalizeChannelOutcome(channel, rawResponse = {}) {
         text.includes("unsubscribe") ||
         text.includes("remove me") ||
         text.includes("stop calling") ||
-        text.includes("do not call")
+        text.includes("stop emailing") ||
+        text.includes("do not call") ||
+        text.includes("do not contact") ||
+        text.includes("don't contact") ||
+        text.includes("dont contact")
     ) {
         return ASE_OUTCOMES.DNC;
     }

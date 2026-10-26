@@ -64,7 +64,7 @@ export const FollowUpSequence = {
                 data.sending_window_start || "09:00",
                 data.sending_window_end || "18:00",
                 JSON.stringify(data.sending_days || [1, 2, 3, 4, 5]),
-                data.timezone || "UTC",
+                data.timezone || "Asia/Kolkata",
             ]
         );
         return this.findById(result.insertId, orgId);

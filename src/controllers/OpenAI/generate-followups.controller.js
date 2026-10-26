@@ -30,8 +30,13 @@ export const generateFollowups = asyncHandler(async (req, res) => {
     const raw = completion.choices[0]?.message?.content || "[]";
     let data;
     try {
-        data = JSON.parse(raw);
-        if (!Array.isArray(data)) throw new Error("Follow-ups must be an array");
+        const parsed = JSON.parse(raw);
+        data = Array.isArray(parsed)
+            ? parsed
+            : (Array.isArray(parsed.followups)
+                ? parsed.followups
+                : (Object.values(parsed).find(Array.isArray) || []));
+        if (!Array.isArray(data) || data.length === 0) throw new Error("Follow-ups must be an array");
     } catch {
         return res.status(502).json({ error: "OpenAI returned invalid follow-up data" });
     }

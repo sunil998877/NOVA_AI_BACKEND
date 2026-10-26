@@ -1,28 +1,40 @@
 import { env } from "../../../config/env.js";
-
-const HIGH_INTENT = new Set(["ENGAGED", "INTERESTED", "CALLBACK_SCHEDULED", "QUALIFIED"]);
+import { deriveModelSignals } from "./featureSchema.js";
 
 export function buildDecisionPayload(features, eligibility) {
-    const emailAttempts = Number(features.emailAttempts || 0);
-    const voiceAttempts = Number(features.voiceAttempts || 0);
-    const linkClicks = Number(features.linkClicks || 0);
-    const hours = Number(features.hoursSinceLastTouch || 0);
-    const candidates = eligibility.candidateActions || [];
-
+    const signals = deriveModelSignals(features);
     return {
         email_opens: Number(features.emailOpens || 0),
-        link_clicks: linkClicks,
-        email_attempts: emailAttempts,
-        voice_attempts: voiceAttempts,
-        hours_since_last_touch: hours,
+        link_clicks: Number(features.linkClicks || 0),
+        email_attempts: Number(features.emailAttempts || 0),
+        voice_attempts: Number(features.voiceAttempts || 0),
+        hours_since_last_touch: Number(features.hoursSinceLastTouch || 0),
         engagement_score: Number(features.engagementScore || 0),
         email_consent: features.emailConsentAllowed ? 1 : 0,
         voice_consent: features.voiceConsentAllowed ? 1 : 0,
         priority: Number(features.priority || 50),
-        recent_click: linkClicks > 0 && hours <= 48 ? 1 : 0,
-        high_intent: HIGH_INTENT.has(String(features.status || "").toUpperCase()) || linkClicks >= 2 ? 1 : 0,
-        fatigue: Math.min(1, (emailAttempts / 3) * 0.6 + (voiceAttempts / 2) * 0.4),
-        candidate_actions: candidates,
+        recent_click: signals.recentClick,
+        high_intent: signals.highIntent,
+        fatigue: signals.fatigue,
+        candidate_actions: eligibility.candidateActions || [],
+    };
+}
+
+export function normalizeModelDecision(ml) {
+    if (!ml) return null;
+    return {
+        available: true,
+        action: ml.action || "WAIT",
+        channel: ml.channel || null,
+        confidence: Number(ml.confidence || 0),
+        probabilities: ml.probabilities || null,
+        modelVersion: ml.model_version || ml.modelVersion || null,
+        provider: ml.provider || "fastapi-onnx-sklearn",
+        reason_code: ml.reason_code || "ML_MODEL_DECISION",
+        explanation: ml.explanation || "",
+        ranked_actions: ml.ranked_actions || [],
+        conversion_probability: ml.conversion_probability,
+        delay_hours: Number(ml.delay_hours || 0),
     };
 }
 

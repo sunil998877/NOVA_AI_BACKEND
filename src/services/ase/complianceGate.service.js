@@ -1,6 +1,9 @@
 import { Suppression } from "../../models/suppression.model.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
+import { FollowUpEnrollment } from "../../models/follow-up-enrollment.model.js";
+import { isWithinCallingHours } from "./callingHours.service.js";
+import { minTouchGapHours } from "./brain/featureSchema.js";
 
 const TERMINAL_STATES = new Set([
     "CLOSED_WON",
@@ -12,7 +15,7 @@ const TERMINAL_STATES = new Set([
 const MAX_EMAILS = 3;
 const MAX_CALLS = 2;
 
-export async function validateDispatchEligibility(lead, action) {
+export async function validateDispatchEligibility(lead, action, options = {}) {
     if (!lead) {
         return { eligible: false, reason: "Lead record not found" };
     }
@@ -50,7 +53,22 @@ export async function validateDispatchEligibility(lead, action) {
         return { eligible: false, reason: "Lead matched suppression list" };
     }
 
-    const counters = lead.attempt_counters || { email: 0, voice: 0, total: 0 };
+    if (lead.last_contacted_at && !options.isEngagementTrigger && lead.status !== "ENGAGED" && !options.bypassCooldown) {
+        const minGapHours = minTouchGapHours();
+        const msSinceLast = Date.now() - new Date(lead.last_contacted_at).getTime();
+        if (msSinceLast < minGapHours * 3600 * 1000) {
+            return { eligible: false, reason: "Same-day outreach cooldown active" };
+        }
+    }
+
+    const activeEnrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
+    if (activeEnrollment && !options.isEngagementTrigger && lead.status !== "ENGAGED") {
+        return { eligible: false, reason: "Lead is actively enrolled in follow-up sequence cadence" };
+    }
+
+    const counters = typeof lead.attempt_counters === "string"
+        ? JSON.parse(lead.attempt_counters || "{}")
+        : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
 
     if (action === "EMAIL") {
         if (!lead.email) {
@@ -68,11 +86,21 @@ export async function validateDispatchEligibility(lead, action) {
         if (!lead.phone) {
             return { eligible: false, reason: "Lead has no phone number" };
         }
+        const cleanedDigits = String(lead.phone).replace(/[^\d]/g, "");
+        if (cleanedDigits.length < 10 || cleanedDigits.length > 15) {
+            return { eligible: false, reason: "Lead phone number is unverified or invalid" };
+        }
         if (lead.voice_consent?.status === "DENIED") {
             return { eligible: false, reason: "Voice consent has been denied" };
         }
+        if (lead.voice_consent?.status !== "GRANTED") {
+            return { eligible: false, reason: "Voice consent has not been granted" };
+        }
         if (Number(counters.voice || 0) >= MAX_CALLS) {
             return { eligible: false, reason: "Maximum call fatigue limit reached" };
+        }
+        if (!options.bypassCallingHours && !isWithinCallingHours(lead, options)) {
+            return { eligible: false, reason: "Outside allowed calling hours" };
         }
     }
 

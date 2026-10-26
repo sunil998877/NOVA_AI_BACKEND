@@ -1,0 +1,39 @@
+{
+  "feature_schema_version": "v2.0",
+  "normalization": "clip_divide_by_scale",
+  "features": [
+    "email_opens",
+    "link_clicks",
+    "email_attempts",
+    "voice_attempts",
+    "hours_since_last_touch",
+    "engagement_score",
+    "email_consent",
+    "voice_consent",
+    "priority",
+    "recent_click",
+    "high_intent",
+    "fatigue"
+  ],
+  "scales": {
+    "email_opens": 8,
+    "link_clicks": 5,
+    "email_attempts": 3,
+    "voice_attempts": 2,
+    "hours_since_last_touch": 168,
+    "engagement_score": 100,
+    "email_consent": 1,
+    "voice_consent": 1,
+    "priority": 100,
+    "recent_click": 1,
+    "high_intent": 1,
+    "fatigue": 1
+  },
+  "classes": {
+    "0": "EMAIL",
+    "1": "CALL",
+    "2": "WAIT"
+  },
+  "architecture": "12-32-16-3",
+  "high_intent_statuses": ["ENGAGED", "INTERESTED", "CALLBACK_SCHEDULED", "QUALIFIED"]
+}

@@ -23,6 +23,7 @@ import { telephonyWebhookEventSchema } from "./telephony-webhook-event.schema.js
 import { senderAccountSchema } from "./sender-account.schema.js";
 import { emailDeliverySchema } from "./email-delivery.schema.js";
 import { followUpSequenceSchema, followUpEnrollmentSchema, followUpTaskSchema, followUpAutomationSchema } from "./follow-up.schema.js";
+import { salesPlaybookSchema } from "./sales-playbook.schema.js";
 
 export const schemas = [
     organizationSchema,
@@ -53,6 +54,7 @@ export const schemas = [
     followUpEnrollmentSchema,
     followUpTaskSchema,
     followUpAutomationSchema,
+    salesPlaybookSchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);
@@ -75,4 +77,5 @@ export {
     followUpEnrollmentSchema,
     followUpTaskSchema,
     followUpAutomationSchema,
+    salesPlaybookSchema,
 };

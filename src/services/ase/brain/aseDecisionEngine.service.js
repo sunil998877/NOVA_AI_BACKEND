@@ -7,7 +7,26 @@ import { nextBestActionService } from "./nextBestAction.service.js";
 import { decisionExplanationService } from "./decisionExplanation.service.js";
 import { decisionAuditService } from "./decisionAudit.service.js";
 import { modelRegistry } from "./modelRegistry.service.js";
-import { buildDecisionPayload, decideWithModel } from "./mlDecision.client.js";
+import { buildDecisionPayload, decideWithModel, normalizeModelDecision } from "./mlDecision.client.js";
+import { buildOptimalSendWindow } from "../callingHours.service.js";
+
+function resolveSchedule(lead, decision, features) {
+    const delayHours = Number(decision.delayHours || 0);
+    const sendWindow = buildOptimalSendWindow(lead, {
+        delayHours,
+        action: decision.recommendedAction || "WAIT",
+        status: features.status,
+        engagementScore: features.engagementScore,
+        emailOpens: features.emailOpens,
+    });
+    const windowStart = sendWindow?.start ? new Date(sendWindow.start) : null;
+    const fallback = new Date(Date.now() + delayHours * 3600 * 1000);
+    return {
+        delayHours,
+        sendWindow,
+        scheduledTime: windowStart && !Number.isNaN(windowStart.getTime()) ? windowStart : fallback,
+    };
+}
 
 export const aseDecisionEngine = {
     async evaluateLead(lead, options = { audit: true }) {
@@ -57,80 +76,21 @@ export const aseDecisionEngine = {
         }
 
         const status = modelRegistry.getModelStatus();
+        let prediction = null;
+
         if (status.mode === "ACTIVE") {
             try {
-                const ml = await decideWithModel(buildDecisionPayload(features, eligibility));
-                const conversionPrediction = conversionPredictionService.predictConversionProbability(features, {
-                    available: true,
-                    probabilities: ml.probabilities,
-                });
-                conversionPrediction.probability = ml.conversion_probability;
-                conversionPrediction.modelVersion = ml.model_version;
-                conversionPrediction.modelId = ml.provider;
-                conversionPrediction.predictionStatus = "SUCCESS";
-
-                const decision = {
-                    recommendedAction: ml.action,
-                    channel: ml.channel,
-                    delayHours: ml.delay_hours,
-                    reasonCode: ml.reason_code,
-                };
-                const explanation = {
-                    summary: ml.explanation,
-                    reasonCodes: [ml.reason_code, ...(eligibility.blockedReasons || [])],
-                };
-                const scheduledTime = ml.action
-                    ? new Date(Date.now() + Number(ml.delay_hours || 0) * 3600 * 1000)
-                    : null;
-                const result = {
-                    leadId: lead.id,
-                    organizationId: features.organizationId,
-                    action: ml.action,
-                    channel: ml.channel,
-                    delayHours: ml.delay_hours,
-                    scheduledTime,
-                    isEligible: Boolean(ml.action),
-                    isAssistedByMl: true,
-                    priority,
-                    confidence: ml.confidence,
-                    reasonCode: ml.reason_code,
-                    explanation: ml.explanation,
-                    reasonCodes: explanation.reasonCodes,
-                    supportingMetrics: {
-                        engagementScore: features.engagementScore,
-                        emailAttempts: features.emailAttempts,
-                        voiceAttempts: features.voiceAttempts,
-                        hoursSinceLastTouch: features.hoursSinceLastTouch,
-                    },
-                    probabilities: ml.probabilities,
-                    rankedActions: ml.ranked_actions,
-                    conversionPrediction,
-                    modelVersion: ml.model_version,
-                    provider: ml.provider,
-                    timestamp: new Date().toISOString(),
-                };
-
-                if (options.audit) {
-                    await decisionAuditService.logDecision({
-                        lead,
-                        decision,
-                        explanation,
-                        prediction: { available: true, probabilities: ml.probabilities, modelVersion: ml.model_version },
-                        conversionPrediction,
-                    });
-                }
-                return result;
+                prediction = normalizeModelDecision(
+                    await decideWithModel(buildDecisionPayload(features, eligibility))
+                );
             } catch (error) {
-                console.error("ASE model service unavailable, using rules baseline:", error.message);
+                console.error("ASE model service unavailable, using local inference:", error.message);
             }
         }
 
-        let prediction = null;
-        if (eligibility.isEligible || eligibility.candidateActions.length > 0) {
+        if (!prediction && (eligibility.isEligible || eligibility.candidateActions.length > 0)) {
             prediction = await modelInferenceService.predict(features);
         }
-
-        const conversionPrediction = conversionPredictionService.predictConversionProbability(features, prediction);
 
         const decision = nextBestActionService.determineNextBestAction({
             eligibility,
@@ -138,6 +98,22 @@ export const aseDecisionEngine = {
             priority,
             prediction,
         });
+
+        let conversionPrediction = conversionPredictionService.predictConversionProbability(features, prediction);
+        if (prediction?.available && prediction.conversion_probability != null) {
+            conversionPrediction.probability = conversionPredictionService.calibrateProbability(
+                prediction.conversion_probability,
+                {
+                    status: features.status,
+                    action: decision.recommendedAction || prediction.action || "WAIT",
+                    probabilities: prediction.probabilities,
+                    confidence: prediction.confidence,
+                }
+            );
+            conversionPrediction.modelVersion = prediction.modelVersion || conversionPrediction.modelVersion;
+            conversionPrediction.modelId = prediction.provider || conversionPrediction.modelId;
+            conversionPrediction.predictionStatus = "SUCCESS";
+        }
 
         const explanation = decisionExplanationService.generateExplanation({
             lead,
@@ -148,28 +124,36 @@ export const aseDecisionEngine = {
             prediction,
         });
 
-        const scheduledTime = decision.recommendedAction
-            ? new Date(Date.now() + decision.delayHours * 3600 * 1000)
-            : null;
+        const schedule = resolveSchedule(lead, decision, features);
+        decision.sendWindow = schedule.sendWindow;
+        decision.emailAttempts = features.emailAttempts;
+        decision.voiceAttempts = features.voiceAttempts;
 
         const result = {
             leadId: lead.id,
             organizationId: features.organizationId,
             action: decision.recommendedAction,
             channel: decision.channel,
-            delayHours: decision.delayHours,
-            scheduledTime,
-            isEligible: eligibility.isEligible,
+            delayHours: schedule.delayHours,
+            scheduledTime: schedule.scheduledTime,
+            sendWindow: schedule.sendWindow,
+            isEligible: eligibility.isEligible && Boolean(decision.recommendedAction),
             isAssistedByMl: decision.isAssistedByMl,
             priority,
             confidence: decision.confidence,
             reasonCode: decision.reasonCode,
-            explanation: explanation.summary,
+            explanation: prediction?.available && decision.isAssistedByMl && prediction.explanation
+                ? prediction.explanation
+                : explanation.summary,
             reasonCodes: explanation.reasonCodes,
             supportingMetrics: explanation.supportingMetrics,
+            policyChecks: eligibility.blockedReasons,
             conversionPrediction,
             shadowPrediction: decision.shadowPrediction || null,
             modelVersion: prediction?.modelVersion || "rules-only",
+            provider: decision.isAssistedByMl ? (prediction?.provider || null) : null,
+            probabilities: prediction?.probabilities || null,
+            rankedActions: prediction?.ranked_actions || null,
             timestamp: new Date().toISOString(),
         };
 
