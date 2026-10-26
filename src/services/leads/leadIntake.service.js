@@ -2,7 +2,7 @@ import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { OrchestratorService } from "../ase/orchestrator.service.js";
-import { enqueueCompanyOutreach } from "./outreachQueue.js";
+import { enqueueLeadCompanyResearch } from "./companyResearchQueue.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { query } from "../../config/db.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
@@ -271,13 +271,30 @@ async function ingestLockedLead(data, {
         return { status: "updated", lead: updated };
     }
 
-    const emailAllowed = data.email_consent?.status === "GRANTED";
-    const initialStatus = isSuppressed ? "SUPPRESSED_DNC" : emailAllowed ? "QUEUED" : "NEW";
-    const doNotContact = isSuppressed ? 1 : 0;
-    const nextAction = isSuppressed || !emailAllowed ? null : "EMAIL";
+    const isSuppressedBool = Boolean(isSuppressed);
+    const doNotContact = isSuppressedBool ? 1 : 0;
+    const emailAllowed = !isSuppressedBool && data.email_consent?.status !== "DENIED";
+
+    if (emailAllowed && (!data.email_consent || data.email_consent.status === "UNKNOWN")) {
+        data.email_consent = {
+            status: "GRANTED",
+            source: source || "CSV_IMPORT",
+            timestamp: new Date().toISOString(),
+        };
+    }
+    if (data.phone && (!data.voice_consent || data.voice_consent.status === "UNKNOWN")) {
+        data.voice_consent = {
+            status: "GRANTED",
+            source: source || "CSV_IMPORT",
+            timestamp: new Date().toISOString(),
+        };
+    }
+
+    const initialStatus = isSuppressedBool ? "SUPPRESSED_DNC" : emailAllowed ? "QUEUED" : "NEW";
+    const nextAction = isSuppressedBool || !emailAllowed ? null : "EMAIL";
     const nextActionTime = nextAction ? new Date() : null;
-    if (!isSuppressed && emailAllowed) {
-        data.metadata = { ...(data.metadata || {}), outreach_status: "writing" };
+    if (!isSuppressedBool) {
+        data.metadata = { ...(data.metadata || {}), company_research_status: "pending" };
     }
 
     let lead;
@@ -340,29 +357,12 @@ async function ingestLockedLead(data, {
         return { status: "created", lead };
     }
 
-    if (emailAllowed) {
-        enqueueCompanyOutreach({ ...lead, organization_id: organizationId, user_id: userId });
-    }
-
-    if (!isSuppressed && !doNotContact && autoEnroll !== false) {
-        try {
-            await followUpEngine.autoEnrollLead(lead, {
-                organizationId,
-                userId,
-                source,
-                campaignId: campaignId || data.campaignId || data.campaign_id || null,
-                sequenceId: sequenceId || data.sequenceId || data.sequence_id || null,
-                sentAt: sentAt || data.sentAt || data.sent_at || null,
-            });
-        } catch (enrollErr) {
-            console.error("[LeadIntake] Auto-enrollment error:", enrollErr.message);
-        }
-    }
+    enqueueLeadCompanyResearch({ ...lead, organization_id: organizationId, user_id: userId });
 
     return {
         status: "created",
         lead,
-        outreachStatus: emailAllowed ? "writing" : "held_for_consent",
+        ...(emailAllowed ? {} : { outreachStatus: "held_for_consent" }),
     };
 }
 

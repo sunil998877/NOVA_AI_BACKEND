@@ -1,24 +1,24 @@
-"""FastAPI decision service. The ONNX action model chooses email, call, or wait."""
-
 import json
 from pathlib import Path
 
 import joblib
 import numpy as np
 import onnxruntime as ort
-from fastapi import FastAPI
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from ml_service.train_heads import CONVERSION_PATH, DELAY_PATH, train_and_save
+from ml_service.features import ACTIONS, FEATURE_NAMES, FEATURE_SCHEMA_VERSION, ROOT, scale_vector
+from ml_service.train_heads import CONVERSION_PATH, DELAY_PATH, EVAL_PATH, train_and_save
 
-ROOT = Path(__file__).resolve().parents[1]
 MODEL_DIR = ROOT / "src" / "models" / "ml"
 ONNX_PATH = MODEL_DIR / "lead_next_action.onnx"
 META_PATH = MODEL_DIR / "lead_next_action_meta.json"
-ACTIONS = ("EMAIL", "CALL", "WAIT")
 
 session = None
 metadata = {}
+evaluation = {}
 delay_model = None
 conversion_model = None
 
@@ -36,41 +36,26 @@ class DecideRequest(BaseModel):
     recent_click: float = 0
     high_intent: float = 0
     fatigue: float = 0
+    status: Optional[str] = None
     candidate_actions: list[str] = Field(default_factory=list)
 
 
 def load_models():
-    global session, metadata, delay_model, conversion_model
+    global session, metadata, evaluation, delay_model, conversion_model
+    if not META_PATH.exists() or not ONNX_PATH.exists():
+        train_and_save()
     metadata = json.loads(META_PATH.read_text(encoding="utf-8"))
+    if metadata.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+        raise RuntimeError("ONNX metadata feature schema does not match ml_service.features")
+    if list(metadata.get("features") or []) != FEATURE_NAMES:
+        raise RuntimeError("ONNX feature order does not match shared schema")
     if not DELAY_PATH.exists() or not CONVERSION_PATH.exists():
         train_and_save()
+        metadata = json.loads(META_PATH.read_text(encoding="utf-8"))
     session = ort.InferenceSession(str(ONNX_PATH), providers=["CPUExecutionProvider"])
     delay_model = joblib.load(DELAY_PATH)
     conversion_model = joblib.load(CONVERSION_PATH)
-
-
-def feature_vector(body: DecideRequest) -> np.ndarray:
-    names = metadata["features"]
-    scales = metadata["scales"]
-    raw = {
-        "email_opens": body.email_opens,
-        "link_clicks": body.link_clicks,
-        "email_attempts": body.email_attempts,
-        "voice_attempts": body.voice_attempts,
-        "hours_since_last_touch": min(168.0, max(0.0, body.hours_since_last_touch)),
-        "engagement_score": body.engagement_score,
-        "email_consent": body.email_consent,
-        "voice_consent": body.voice_consent,
-        "priority": body.priority,
-        "recent_click": body.recent_click,
-        "high_intent": body.high_intent,
-        "fatigue": body.fatigue,
-    }
-    values = []
-    for name in names:
-        scale = float(scales.get(name, 1))
-        values.append(min(1.0, max(0.0, float(raw.get(name, 0)) / scale)))
-    return np.array(values, dtype=np.float32).reshape(1, -1)
+    evaluation = json.loads(EVAL_PATH.read_text(encoding="utf-8")) if EVAL_PATH.exists() else {}
 
 
 def class_probabilities(vector: np.ndarray) -> dict:
@@ -78,11 +63,13 @@ def class_probabilities(vector: np.ndarray) -> dict:
     names = [item.name for item in session.get_outputs()]
     by_name = dict(zip(names, outputs))
     probs = np.array(by_name["output_probability"], dtype=np.float64).reshape(-1)
+    if probs.size != len(ACTIONS):
+        raise RuntimeError("ONNX probability output does not match EMAIL/CALL/WAIT")
     total = float(probs.sum()) or 1.0
     return {action: float(probs[index] / total) for index, action in enumerate(ACTIONS)}
 
 
-app = FastAPI(title="ASE Decision Model", version="2.0.0")
+app = FastAPI(title="ASE Decision Model", version="2.1.0")
 
 
 @app.on_event("startup")
@@ -93,19 +80,42 @@ def startup():
 @app.get("/health")
 def health():
     return {
-        "ok": session is not None,
+        "ok": session is not None and delay_model is not None and conversion_model is not None,
         "provider": "fastapi",
         "action_model": "onnxruntime",
         "delay_model": "sklearn.GradientBoostingRegressor",
         "conversion_model": "sklearn.LogisticRegression",
-        "version": metadata.get("version", "2.0.0"),
-        "features": metadata.get("features", []),
+        "version": metadata.get("version", "2.1.0"),
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "features": FEATURE_NAMES,
+        "data_source": metadata.get("data_source", evaluation.get("data_source")),
     }
+
+
+@app.get("/schema")
+def schema():
+    return {
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "features": FEATURE_NAMES,
+        "architecture": metadata.get("architecture"),
+        "classes": metadata.get("classes"),
+    }
+
+
+@app.get("/metrics")
+def metrics():
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="No evaluation report. Train with python -m ml_service.train_heads")
+    return evaluation
 
 
 @app.post("/decide")
 def decide(body: DecideRequest):
-    vector = feature_vector(body)
+    if session is None:
+        raise HTTPException(status_code=503, detail="Action model is not loaded")
+    vector = scale_vector(body)
+    if vector.shape[1] != 12:
+        raise HTTPException(status_code=500, detail="Feature vector is not 12 dimensions")
     probabilities = class_probabilities(vector)
     allowed = {action.upper() for action in body.candidate_actions}
     masked = {
@@ -139,7 +149,6 @@ def decide(body: DecideRequest):
         f"Email {probabilities['EMAIL'] * 100:.0f}%, call {probabilities['CALL'] * 100:.0f}%, "
         f"wait {probabilities['WAIT'] * 100:.0f}%."
     )
-
     return {
         "action": action,
         "channel": channel,
@@ -149,7 +158,9 @@ def decide(body: DecideRequest):
         "conversion_probability": round(conversion, 3),
         "explanation": explanation,
         "reason_code": "ML_MODEL_DECISION",
-        "model_version": metadata.get("version", "2.0.0"),
+        "model_version": metadata.get("version", "2.1.0"),
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "data_source": metadata.get("data_source", "unknown"),
         "provider": "fastapi-onnx-sklearn",
         "ranked_actions": ranked,
     }

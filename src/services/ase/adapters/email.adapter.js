@@ -1,9 +1,20 @@
+import crypto from "crypto";
 import { BaseChannelAdapter } from "./base.adapter.js";
 import { unifiedDeliveryService } from "../../email/unifiedDelivery.service.js";
 import { env } from "../../../config/env.js";
 import { draftCompanyPersonalizedEmail } from "../leadEmailDrafter.service.js";
 import { Lead } from "../../../models/lead.model.js";
 import { LeadEvent } from "../../../models/lead-event.model.js";
+import { resolvePublicBaseUrl } from "../../../utils/publicBaseUrl.js";
+import { sanitizeOutreachEmail } from "../../../utils/outreachEmail.js";
+
+function attachOpenPixel(html, leadId, token, baseUrl) {
+    const src = `${baseUrl}/api/tracking/open/ase/${leadId}?t=${token}`;
+    const pixel = `<img src="${src}" width="1" height="1" alt="" border="0" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;display:block;" />`;
+    const body = html || "";
+    if (/<\/body>/i.test(body)) return body.replace(/<\/body>/i, `${pixel}</body>`);
+    return `${body}${pixel}`;
+}
 
 export class NovaEmailAdapter extends BaseChannelAdapter {
     constructor() {
@@ -24,11 +35,13 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
         const reservedDomains = ["example.com", "example.net", "example.org", "test", "invalid", "localhost"];
 
         const senderEmail = payload.from || env.novaSenderEmail || "outreach@nova-sales.internal";
-        const senderName = payload.senderName || env.novaSenderName || "NOVA Sales";
+        const senderName = payload.senderName || env.novaSenderName || "NOVA AI";
         const fromAddress = `"${senderName}" <${senderEmail}>`;
 
-        const currentMeta = typeof lead.metadata === "object" && lead.metadata ? lead.metadata : {};
-        const storedEmail = currentMeta.outreach_email || null;
+        const currentMeta = { ...(typeof lead.metadata === "object" && lead.metadata ? lead.metadata : {}) };
+        const storedEmail = currentMeta.outreach_email
+            ? sanitizeOutreachEmail(currentMeta.outreach_email, senderName)
+            : null;
 
         let subject = payload.subject || storedEmail?.subject;
         let bodyText = payload.text || storedEmail?.text;
@@ -43,19 +56,56 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
             companyResearch = drafted.research || companyResearch;
         }
 
-        if (lead.id && companyResearch && !currentMeta.company_research) {
+        if (subject && (bodyText || bodyHtml)) {
+            const cleaned = sanitizeOutreachEmail({ subject, text: bodyText, html: bodyHtml }, senderName);
+            subject = cleaned.subject;
+            bodyText = cleaned.text;
+            bodyHtml = cleaned.html;
+        }
+
+        if (lead.id && subject && (bodyText || bodyHtml) && !storedEmail?.subject) {
+            currentMeta.outreach_email = {
+                subject,
+                text: bodyText,
+                html: bodyHtml,
+                written_at: new Date().toISOString(),
+                is_edited: false,
+            };
+            currentMeta.outreach_status = "ready";
+        }
+
+        if (!bodyHtml && bodyText) {
+            bodyHtml = `<p>${String(bodyText).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
+        }
+
+        const openToken = currentMeta.outreach_open_token || crypto.randomBytes(24).toString("hex");
+        const trackingBase = await resolvePublicBaseUrl();
+        if (lead.id) {
+            bodyHtml = attachOpenPixel(bodyHtml, lead.id, openToken, trackingBase);
             try {
                 await Lead.updateById(
                     lead.id,
                     {
                         metadata: {
                             ...currentMeta,
-                            company_research: companyResearch,
+                            company_research: companyResearch || currentMeta.company_research || null,
+                            outreach_email: currentMeta.outreach_email || {
+                                subject,
+                                text: bodyText,
+                                html: bodyHtml,
+                                written_at: new Date().toISOString(),
+                            },
+                            outreach_status: "ready",
+                            outreach_open_token: openToken,
                         },
                     },
                     lead.organization_id || 1
                 );
+            } catch (_) {}
+        }
 
+        if (lead.id && companyResearch && !currentMeta.company_research) {
+            try {
                 await LeadEvent.create({
                     organization_id: lead.organization_id || 1,
                     lead_id: lead.id,
@@ -73,7 +123,7 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
                         source: companyResearch.source,
                     },
                 });
-            } catch (_) {}
+            } catch (_) { }
         }
 
         if (reservedDomains.includes(domain)) {

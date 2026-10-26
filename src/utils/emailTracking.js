@@ -2,6 +2,10 @@ import crypto from "crypto";
 import { EmailTrackingLink } from "../models/email-tracking-link.model.js";
 import { EmailEvent } from "../models/email-event.model.js";
 import { Mail } from "../models/mail.model.js";
+import { Lead } from "../models/lead.model.js";
+import { eventBus } from "../services/ase/eventBus.service.js";
+import { OrchestratorService } from "../services/ase/orchestrator.service.js";
+import { detectEmailScanner } from "./emailScannerDetector.js";
 import { toMysqlDateTime } from "./datetime.js";
 
 const OPEN_DEBOUNCE_MS = 60_000;
@@ -170,9 +174,10 @@ export async function handleTrackedOpen({ token, mailId, campaignId, userAgent, 
   let mail = null;
   let resolvedCampaignId = campaignId ? Number(campaignId) : null;
   let trackingToken = token || null;
+  let link = null;
 
   if (token && isTrackingToken(token) && !mailId) {
-    const link = await EmailTrackingLink.findByToken(token);
+    link = await EmailTrackingLink.findByToken(token);
     if (!link || link.link_type !== "open") return { ok: false };
     mail = await Mail.findById(link.mail_id);
     resolvedCampaignId = link.campaign_id || resolvedCampaignId;
@@ -180,7 +185,10 @@ export async function handleTrackedOpen({ token, mailId, campaignId, userAgent, 
   } else if (mailId) {
     mail = await Mail.findById(mailId);
     resolvedCampaignId = resolvedCampaignId || (mail ? Number(mail.campaign_id) : null);
-    if (token && isTrackingToken(token)) trackingToken = token;
+    if (token && isTrackingToken(token)) {
+      trackingToken = token;
+      link = await EmailTrackingLink.findByToken(token);
+    }
   }
 
   if (!mail) return { ok: false };
@@ -213,6 +221,52 @@ export async function handleTrackedOpen({ token, mailId, campaignId, userAgent, 
       ipAddress,
     });
     console.log(`[TrackOpen] mail=${mail.id} open#${nextOpenCount}`);
+
+    try {
+      let lead = null;
+      let leadId = link?.lead_id || null;
+      if (leadId) {
+        lead = await Lead.findById(leadId);
+      }
+      if (!lead && mail.email) {
+        lead = await Lead.findByEmailAnyOrg(mail.email);
+      }
+
+      if (lead) {
+        const scannerResult = detectEmailScanner(userAgent, ipAddress);
+        await eventBus.publish("EMAIL_OPENED", {
+          organization_id: lead.organization_id || 1,
+          lead_id: lead.id,
+          channel: "EMAIL",
+          status: "OPENED",
+          source: scannerResult.isScanner ? "PRIVACY_PROXY" : "EMAIL_PIXEL",
+          payload: {
+            mail_id: mail.id,
+            campaign_id: resolvedCampaignId || mail.campaign_id,
+            open_count: nextOpenCount,
+            is_first_open: isFirstOpen,
+            user_agent: userAgent,
+            ip_address: ipAddress,
+            is_scanner: scannerResult.isScanner,
+            scanner_type: scannerResult.scannerType,
+            opened_at: new Date().toISOString(),
+          },
+          idempotency_key: `open_${mail.id}_${nextOpenCount}`,
+        });
+
+        await OrchestratorService.handleEmailOpen(lead, {
+          mailId: mail.id,
+          campaignId: resolvedCampaignId || mail.campaign_id,
+          isScanner: scannerResult.isScanner,
+          scannerType: scannerResult.scannerType,
+          userAgent,
+          ipAddress,
+          isFirstOpen,
+        });
+      }
+    } catch (openErr) {
+      console.warn("[TrackOpen] Failed to process lead open event:", openErr.message);
+    }
   }
 
   return { ok: true, mailId: mail.id, debounced: isDuplicateBurst };
@@ -223,9 +277,10 @@ export async function handleTrackedClick({ token, mailId, campaignId, fallbackUr
   let mail = null;
   let resolvedCampaignId = campaignId ? Number(campaignId) : null;
   let trackingToken = token || null;
+  let link = null;
 
   if (token && isTrackingToken(token) && !mailId) {
-    const link = await EmailTrackingLink.findByToken(token);
+    link = await EmailTrackingLink.findByToken(token);
     if (!link || link.link_type !== "click") return { ok: false, redirectTo: null };
     if (!link.original_url || !isSafeHttpUrl(link.original_url)) {
       return { ok: false, redirectTo: null };
@@ -240,7 +295,7 @@ export async function handleTrackedClick({ token, mailId, campaignId, fallbackUr
     if (fromQuery) {
       originalUrl = fromQuery;
     } else if (token && isTrackingToken(token)) {
-      const link = await EmailTrackingLink.findByToken(token);
+      link = await EmailTrackingLink.findByToken(token);
       if (link?.original_url && isSafeHttpUrl(link.original_url)) {
         originalUrl = link.original_url;
         trackingToken = link.tracking_token;
@@ -277,6 +332,37 @@ export async function handleTrackedClick({ token, mailId, campaignId, fallbackUr
     userAgent,
     ipAddress,
   });
+
+  try {
+    let lead = null;
+    let leadId = link?.lead_id || null;
+    if (leadId) {
+      lead = await Lead.findById(leadId);
+    }
+    if (!lead && mail.email) {
+      lead = await Lead.findByEmailAnyOrg(mail.email);
+    }
+    if (lead) {
+      await eventBus.publish("EMAIL_CLICKED", {
+        organization_id: lead.organization_id || 1,
+        lead_id: lead.id,
+        channel: "EMAIL",
+        status: "CLICKED",
+        source: "EMAIL_LINK",
+        payload: {
+          mail_id: mail.id,
+          campaign_id: resolvedCampaignId || mail.campaign_id,
+          url: originalUrl,
+          user_agent: userAgent,
+          ip_address: ipAddress,
+          clicked_at: new Date().toISOString(),
+        },
+        idempotency_key: `click_${mail.id}_${nextClickCount}`,
+      });
+    }
+  } catch (clickErr) {
+    console.warn("[TrackClick] Failed to process lead click event:", clickErr.message);
+  }
 
   console.log(`[TrackClick] mail=${mail.id} -> ${originalUrl}`);
   return { ok: true, redirectTo: originalUrl };

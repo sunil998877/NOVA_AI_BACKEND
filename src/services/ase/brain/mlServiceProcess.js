@@ -10,6 +10,7 @@ let child = null;
 let shuttingDown = false;
 let restartTimer = null;
 let watchdog = null;
+let ensurePromise = null;
 
 function serviceBase() {
     return String(env.aseMlUrl || "http://127.0.0.1:8091").replace(/\/$/, "");
@@ -54,7 +55,16 @@ function scheduleRestart(delayMs) {
     restartTimer.unref?.();
 }
 
-export async function ensureMlService() {
+async function waitUntilHealthy(timeoutMs = 30000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        if (await isHealthy()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return isHealthy();
+}
+
+async function ensureMlServiceOnce() {
     if (!watchdog && !shuttingDown) {
         watchdog = setInterval(() => {
             ensureMlService();
@@ -64,9 +74,25 @@ export async function ensureMlService() {
 
     if (await isHealthy()) {
         if (!child) console.log(`ASE decision model already running at ${serviceBase()}`);
-        return;
+        return true;
     }
     startChild();
+    const ready = await waitUntilHealthy(30000);
+    if (ready) {
+        console.log(`ASE decision model ready at ${serviceBase()}`);
+        return true;
+    }
+    console.warn(`ASE decision model did not become healthy at ${serviceBase()} — using rules until it starts`);
+    return false;
+}
+
+export async function ensureMlService() {
+    if (!ensurePromise) {
+        ensurePromise = ensureMlServiceOnce().finally(() => {
+            ensurePromise = null;
+        });
+    }
+    return ensurePromise;
 }
 
 export function stopMlService() {

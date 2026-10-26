@@ -1,4 +1,5 @@
 import { getOpenAiClient } from "../../controllers/OpenAI/client.js";
+import { tryPlaybookEmail, followupTypeForStep } from "../ase/salesPlaybook.service.js";
 
 function shouldBypassAi(options = {}) {
     if (options.forceDeterministic) return true;
@@ -10,6 +11,9 @@ function shouldBypassAi(options = {}) {
 
 export const followUpContentService = {
     async generateStepContent(stepNumber, lead = {}, initialContext = {}, options = {}) {
+        const playbookEmail = await tryPlaybookEmail(lead, followupTypeForStep(stepNumber));
+        if (playbookEmail) return playbookEmail;
+
         const safeLead = lead || {};
         const meta = typeof safeLead.metadata === "object" && safeLead.metadata ? safeLead.metadata : {};
         const research = meta.company_research || initialContext.research || {};
@@ -17,7 +21,7 @@ export const followUpContentService = {
         const company = rawCompany ? rawCompany.charAt(0).toUpperCase() + rawCompany.slice(1) : "Company";
         const firstName = safeLead.first_name || (safeLead.name ? safeLead.name.split(" ")[0] : "there");
         const initialSubject = initialContext.subject || meta.outreach_email?.subject || `${company}: a note on growth`;
-        const senderName = initialContext.senderName || "NOVA Sales";
+        const senderName = initialContext.senderName || "NOVA AI";
         const industry = research.industry || "your industry";
         const offering = research.coreServices || research.summary || "modern digital solutions";
         const targetAudience = research.targetAudience || "your enterprise clients";
@@ -153,19 +157,32 @@ JSON output: { "subject": "Re: ${ctx.initialSubject}", "text": "...", "html": "<
 
     async generateResponseDraft(lead = {}, replyPayload = {}, initialContext = {}, options = {}) {
         const safeLead = lead || {};
+        const meta = typeof safeLead.metadata === "object" && safeLead.metadata ? safeLead.metadata : {};
+        const research = meta.company_research || initialContext.research || {};
         const firstName = safeLead.first_name || (safeLead.name ? safeLead.name.split(" ")[0] : "there");
-        const company = safeLead.company || "your team";
+        const company = research.company || safeLead.company || "your team";
         const replySubject = replyPayload.subject || initialContext.subject || "Outreach inquiry";
         const subject = replySubject.startsWith("Re:") ? replySubject : `Re: ${replySubject}`;
-        const senderName = initialContext.senderName || "NOVA Team";
+        const senderName = initialContext.senderName || "NOVA AI";
+        const replyText = String(replyPayload.replyText || replyPayload.body || "").trim();
+
+        const clean = (value) => String(value || "")
+            .replace(/\[Your Name\]/gi, "")
+            .replace(/\[Name\]/gi, "")
+            .replace(/Your Name/g, "")
+            .replace(/NOVVA AI/gi, senderName)
+            .replace(/\s*Best regards[\s\S]*$/i, `\n\nBest regards,\n${senderName}`)
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
 
         if (!shouldBypassAi(options)) {
             const client = getOpenAiClient();
             if (client) {
                 try {
-                    const prompt = `Prospect ${firstName} at ${company} replied to cold email.
-Their message: "${replyPayload.replyText || replyPayload.body || ""}".
-Write a warm, consultative response draft answering their questions. Under 80 words.
+                    const prompt = `Prospect ${firstName} at ${company} replied to our outreach.
+Their exact reply: "${replyText || "(no body)"}".
+Company context: ${research.summary || company}.
+Write one email that answers their reply directly. Under 90 words. No invented metrics. No placeholders. Close with Best regards, ${senderName}.
 JSON output: { "subject": "${subject}", "text": "...", "html": "<p>...</p>" }`;
 
                     const response = await client.chat.completions.create({
@@ -173,24 +190,25 @@ JSON output: { "subject": "${subject}", "text": "...", "html": "<p>...</p>" }`;
                         temperature: 0.3,
                         response_format: { type: "json_object" },
                         messages: [
-                            { role: "system", content: "You are an AI sales assistant drafting an email response. Return JSON only." },
+                            { role: "system", content: "You write reply emails from the prospect's message. Return JSON only. Never use placeholders like [Your Name]." },
                             { role: "user", content: prompt },
                         ],
                     });
                     const parsed = JSON.parse(response.choices[0]?.message?.content || "{}");
                     if (parsed.text) {
+                        const text = clean(parsed.text);
                         return {
-                            subject: parsed.subject || subject,
-                            text: parsed.text,
-                            html: parsed.html || `<p>${parsed.text.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`,
+                            subject: clean(parsed.subject || subject),
+                            text,
+                            html: clean(parsed.html || `<p>${text.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`),
                         };
                     }
                 } catch (_) {}
             }
         }
 
-        const text = `Hi ${firstName},\n\nThank you for getting back to me regarding ${company}. I would be glad to share more details and answer any questions you have about our automated outreach platform.\n\nWould you have 10-15 minutes later this week for a brief walkthrough?\n\nBest regards,\n${senderName}`;
-        const html = `<p>Hi ${firstName},</p><p>Thank you for getting back to me regarding <strong>${company}</strong>. I would be glad to share more details and answer any questions you have about our automated outreach platform.</p><p>Would you have 10-15 minutes later this week for a brief walkthrough?</p><p>Best regards,<br>${senderName}</p>`;
+        const text = `Hi ${firstName},\n\nThank you for your reply${replyText ? ` — I read your note about ${company}` : ` regarding ${company}`}. I would be glad to continue this conversation and answer your questions.\n\nWould you have 10-15 minutes later this week?\n\nBest regards,\n${senderName}`;
+        const html = `<p>Hi ${firstName},</p><p>Thank you for your reply${replyText ? ` — I read your note about <strong>${company}</strong>` : ` regarding <strong>${company}</strong>`}. I would be glad to continue this conversation and answer your questions.</p><p>Would you have 10-15 minutes later this week?</p><p>Best regards,<br>${senderName}</p>`;
 
         return { subject, text, html };
     },

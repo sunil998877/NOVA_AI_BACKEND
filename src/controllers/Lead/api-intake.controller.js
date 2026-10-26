@@ -41,7 +41,10 @@ export const ingestLeadsFromApi = asyncHandler(async (req, res) => {
         userId: req.user?.id || null,
         source: body.source || (req.authVia === "lead_api_key" ? LEAD_SOURCES.API : "MANUAL"),
         updateExisting: req.query.update === "true" || Boolean(body.updateExisting),
-        matchDomain: req.query.matchDomain !== "false" && body.matchDomain !== false,
+        matchDomain:
+            String(body.source || "").toUpperCase() === "MANUAL"
+                ? false
+                : req.query.matchDomain !== "false" && body.matchDomain !== false,
     };
 
     if (list) {

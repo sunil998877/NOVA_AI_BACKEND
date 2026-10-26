@@ -1,5 +1,6 @@
 import * as ort from "onnxruntime-node";
 import { modelRegistry } from "./modelRegistry.service.js";
+import { buildScaledFeatureVector } from "./featureSchema.js";
 
 class ModelInferenceService {
     constructor() {
@@ -52,7 +53,8 @@ class ModelInferenceService {
         try {
             await this.init();
 
-            const inputTensor = new ort.Tensor("float32", features.vector, [1, 5]);
+            const vector = features.vector?.length === 12 ? features.vector : buildScaledFeatureVector(features);
+            const inputTensor = new ort.Tensor("float32", vector, [1, vector.length]);
             const results = await this.session.run({ float_input: inputTensor });
 
             const labelTensor = results.output_label || results.label;

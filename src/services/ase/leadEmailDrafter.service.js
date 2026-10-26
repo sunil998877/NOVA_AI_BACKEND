@@ -3,34 +3,70 @@ import { env } from "../../config/env.js";
 import { heuristicResearch, loadCompanyContext, rememberCompanyResearch } from "./companyResearch.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
+import { bodyToHtml, formatFirstName, sanitizeOutreachEmail } from "../../utils/outreachEmail.js";
+import { tryPlaybookEmail, EMAIL_TYPES } from "./salesPlaybook.service.js";
+import { validateEmailDraft } from "./emailQuality.service.js";
+
+function resolveSenderName(options = {}) {
+    return options.senderName || env.novaSenderName || "NOVA AI";
+}
+
+function attachQuality(email, research, senderName) {
+    const cleaned = sanitizeOutreachEmail(email, senderName);
+    const qualityChecks = validateEmailDraft({
+        subject: cleaned.subject,
+        text: cleaned.text,
+        html: cleaned.html,
+        research,
+    });
+    return { ...cleaned, research, qualityChecks };
+}
+
+function conservativeEmail({ firstName, company, senderName, research }) {
+    const known = research?.summary
+        || (research?.qualityStatus === "INSUFFICIENT_EVIDENCE"
+            ? `${company} is the organization on this lead record. Public website evidence was not available, so this note stays general.`
+            : `${company} is the organization we would like to speak with.`);
+    const subject = `A note for ${company}`;
+    const text = `Dear ${firstName},\n\nI am reaching out from ${senderName} regarding ${company}. ${known}\n\nIf it would be useful, I would welcome a short conversation about whether our work is relevant to your team.\n\nLooking forward to your thoughts.\n\nBest regards,\n${senderName}`;
+    return attachQuality({ subject, text, html: bodyToHtml(text) }, research, senderName);
+}
 
 async function writeEmailFromResearch(client, { firstName, company, role, senderName, research }) {
+    if (!research?.summary || research.qualityStatus === "INSUFFICIENT_EVIDENCE") return null;
     const completion = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        temperature: 0.4,
+        model: process.env.ASE_RESEARCH_MODEL || "gpt-4o-mini",
+        temperature: 0.2,
         response_format: { type: "json_object" },
         messages: [
-            { role: "system", content: "Write one professional email from the company analysis. Output valid JSON only." },
-            { role: "user", content: `Recipient: ${firstName}
-Company: ${company}
+            { role: "system", content: `Write one professional outreach email using only the supplied research. Do not invent metrics, customers, or familiarity. Sign only as ${senderName}. Output valid JSON.` },
+            { role: "user", content: `Recipient first name: ${firstName}
+Prospect company: ${company}
 Role: ${role || "Decision maker"}
-Sender: ${senderName}
-Summary: ${research.summary}
-Services: ${research.coreServices}
-Audience: ${research.targetAudience}
-Return JSON with subject, text, and html. Under 140 words. No invented metrics.` },
+Sender brand: ${senderName}
+Verified summary: ${research.summary}
+Verified services: ${research.coreServices || ""}
+Audience: ${research.targetAudience || ""}
+Quality: ${research.qualityStatus || "UNKNOWN"}
+
+Return JSON with subject, text, and html. Subject under 10 words. Body under 140 words. One clear CTA. No invented metrics.` },
         ],
     });
     const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
     if (!parsed.subject || (!parsed.html && !parsed.text)) return null;
-    return {
+    const drafted = attachQuality({
         subject: parsed.subject,
         text: parsed.text || String(parsed.html).replace(/<[^>]+>/g, ""),
-        html: parsed.html || `<p>${String(parsed.text).replace(/\n\n/g, "</p><p>")}</p>`,
-    };
+        html: parsed.html || bodyToHtml(parsed.text),
+    }, research, senderName);
+    if (!drafted.qualityChecks.eligibleToSend) return null;
+    return drafted;
 }
 
 export async function draftCompanyPersonalizedEmail(lead, options = {}) {
+    const playbookEmail = await tryPlaybookEmail(lead, options.emailType || EMAIL_TYPES.INITIAL);
+    if (playbookEmail) return playbookEmail;
+
     const rawCompany = lead.company || "";
     const emailDomain = lead.email ? lead.email.split("@")[1] : "";
     const domainCompany = emailDomain && !["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"].includes(emailDomain.toLowerCase())
@@ -38,8 +74,8 @@ export async function draftCompanyPersonalizedEmail(lead, options = {}) {
         : "";
     const company = rawCompany || (domainCompany ? domainCompany.charAt(0).toUpperCase() + domainCompany.slice(1) : "your company");
 
-    const firstName = lead.first_name || (lead.name ? lead.name.split(" ")[0] : "there");
-    const senderName = options.senderName || env.novaSenderName || "NOVA Sales";
+    const firstName = formatFirstName(lead.first_name || (lead.name ? lead.name.split(" ")[0] : "there"));
+    const senderName = resolveSenderName(options);
     const role = lead.title || lead.segment_attributes?.title || "";
     const context = await loadCompanyContext(company, { domain: emailDomain, leadInfo: lead });
     const client = getOpenAiClient();
@@ -53,7 +89,7 @@ export async function draftCompanyPersonalizedEmail(lead, options = {}) {
         } catch {}
     }
 
-    if (client && !context.cachedResearch) {
+    if (client && !context.cachedResearch && (context.siteData?.title || context.siteData?.description)) {
         try {
             const completion = await client.chat.completions.create({
                 model: "gpt-4o-mini",
@@ -80,7 +116,7 @@ Return JSON:
   "text": "plain email under 140 words",
   "html": "same email with paragraph tags"
 }
-Use only the website signals. No invented metrics. No exclamation marks. Close with Best regards, ${senderName}.` },
+Use only the website signals. No invented metrics. No exclamation marks. Never use placeholders like [Your Name]. Close with Best regards, ${senderName} and nothing else.` },
                 ],
             });
             const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
@@ -95,25 +131,19 @@ Use only the website signals. No invented metrics. No exclamation marks. Close w
                     source: "ai_intelligence",
                 };
                 rememberCompanyResearch(context.effectiveDomain, context.effectiveCompany, research);
-                return {
+                const drafted = attachQuality({
                     subject: parsed.subject,
                     text: parsed.text || String(parsed.html).replace(/<[^>]+>/g, ""),
-                    html: parsed.html || `<p>${String(parsed.text).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`,
-                    research,
-                };
+                    html: parsed.html || bodyToHtml(parsed.text),
+                }, research, senderName);
+                if (drafted.qualityChecks.eligibleToSend) return drafted;
             }
         } catch {}
     }
 
     const research = context.cachedResearch || heuristicResearch(context);
     rememberCompanyResearch(context.effectiveDomain, context.effectiveCompany, research);
-
-    const offering = research.coreServices || research.summary || "the work your team is doing";
-    const subject = `${company}: a note on ${research.industry || "your work"}`;
-    const text = `Hi ${firstName},\n\nI spent some time looking at ${company}. ${research.summary}\n\nThat focus on ${offering} is why I am writing. I would like to share one practical idea for how ${company} reaches ${research.targetAudience || "the customers you already serve"}, and hear whether it is relevant.\n\nWould you be open to a short conversation this week?\n\nBest regards,\n${senderName}`;
-    const html = `<p>Hi ${firstName},</p><p>I spent some time looking at <strong>${company}</strong>. ${research.summary}</p><p>That focus on ${offering} is why I am writing. I would like to share one practical idea for how ${company} reaches ${research.targetAudience || "the customers you already serve"}, and hear whether it is relevant.</p><p>Would you be open to a short conversation this week?</p><p>Best regards,<br>${senderName}</p>`;
-
-    return { subject, text, html, research };
+    return conservativeEmail({ firstName, company, senderName, research });
 }
 
 function readMetadata(lead) {
@@ -126,6 +156,72 @@ function readMetadata(lead) {
         }
     }
     return lead.metadata;
+}
+
+export async function storeOutreachDraft(lead, research = null) {
+    if (!lead?.id) return null;
+    const orgId = Number(lead.organization_id || 1);
+    const existing = readMetadata(lead);
+    if (existing.outreach_email?.subject && (existing.outreach_email?.text || existing.outreach_email?.html)) {
+        const senderName = env.novaSenderName || "NOVA AI";
+        const cleaned = sanitizeOutreachEmail(existing.outreach_email, senderName);
+        if (cleaned.text !== existing.outreach_email.text || cleaned.html !== existing.outreach_email.html) {
+            await Lead.updateById(lead.id, {
+                metadata: {
+                    ...existing,
+                    outreach_email: {
+                        ...existing.outreach_email,
+                        ...cleaned,
+                        updated_at: new Date().toISOString(),
+                    },
+                },
+            }, orgId);
+        }
+        return cleaned;
+    }
+
+    const drafted = await draftCompanyPersonalizedEmail({
+        ...lead,
+        metadata: {
+            ...existing,
+            company_research: research || existing.company_research || null,
+        },
+    });
+
+    const outreachEmail = {
+        subject: drafted.subject,
+        text: drafted.text,
+        html: drafted.html,
+        written_at: new Date().toISOString(),
+        is_edited: false,
+        qualityChecks: drafted.qualityChecks || null,
+        approvalStatus: "pending",
+    };
+
+    const metadata = {
+        ...existing,
+        company_research: drafted.research || research || existing.company_research || null,
+        company_research_status: (drafted.research || research || existing.company_research)?.summary ? "ready" : existing.company_research_status,
+        outreach_status: "ready",
+        outreach_email: outreachEmail,
+    };
+
+    await Lead.updateById(lead.id, { metadata }, orgId);
+
+    await LeadEvent.create({
+        organization_id: orgId,
+        lead_id: lead.id,
+        user_id: lead.user_id || null,
+        channel: "EMAIL",
+        event_type: "EMAIL_DRAFTED",
+        status: "COMPLETED",
+        payload: {
+            subject: outreachEmail.subject,
+            company: metadata.company_research?.company || lead.company,
+        },
+    });
+
+    return outreachEmail;
 }
 
 export async function prepareCompanyOutreach(lead) {
@@ -189,3 +285,4 @@ export async function prepareCompanyOutreach(lead) {
         email: metadata.outreach_email,
     };
 }
+

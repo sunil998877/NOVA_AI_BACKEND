@@ -576,38 +576,8 @@ async function migrateTelephonyAndCallbacks(pool) {
 
 async function syncUsersToLeads(pool) {
     try {
-        const [users] = await pool.query("SELECT id, organization_id, fullName, organization, email FROM users");
-        for (const u of users) {
-            if (!u.email) continue;
-            const orgId = Number(u.organization_id || 1);
-            const [existing] = await pool.query(
-                "SELECT id FROM leads WHERE organization_id = ? AND LOWER(email) = LOWER(?)",
-                [orgId, u.email]
-            );
-            if (existing.length === 0) {
-                const nameParts = (u.fullName || "").trim().split(/\s+/);
-                const firstName = nameParts[0] || u.fullName || "User";
-                const lastName = nameParts.slice(1).join(" ") || "";
-                await pool.query(
-                    `INSERT INTO leads (organization_id, user_id, name, first_name, last_name, email, company, source, priority, status, health, metadata, attempt_counters, tags, segment_attributes)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 'SIGNUP', 75, 'NEW', 'GREEN', ?, '{"email":0,"voice":0,"total":0}', '[]', '{}')`,
-                    [
-                        orgId,
-                        u.id,
-                        u.fullName || u.email,
-                        firstName,
-                        lastName,
-                        u.email.toLowerCase().trim(),
-                        u.organization || "Direct Signup",
-                        JSON.stringify({ registered_as_user: true, user_id: u.id }),
-                    ]
-                );
-                console.log(`[Migration] Synced user ${u.fullName} (${u.email}) as a lead in Lead Store`);
-            }
-        }
-    } catch (e) {
-        console.warn("[Migration] Error syncing users to leads:", e.message);
-    }
+        await pool.query("DELETE FROM leads WHERE source = 'SIGNUP'");
+    } catch (_) {}
 }
 
 async function migrateMukhStyleEmailEngine(pool) {
