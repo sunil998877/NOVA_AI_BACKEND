@@ -126,7 +126,8 @@ export const requireRole = (...roles) => {
 export const authenticateUserOrN8n = async (req, res, next) => {
     if (matchesN8nBasicAuth(req)) {
         req.authVia = "n8n_basic";
-        req.user = { id: "n8n", organization_id: 1, role: "SYSTEM_AGENT" };
+        const orgId = Number(req.headers["x-organization-id"] || process.env.N8N_ORGANIZATION_ID || 1);
+        req.user = { id: "n8n", organization_id: orgId, role: "SYSTEM_AGENT" };
         return next();
     }
     return authenticate(req, res, next);

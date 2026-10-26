@@ -72,12 +72,9 @@ export function calculateNextCallingTime(lead, options = {}) {
         return candidateTime;
     }
 
-    const nextTime = new Date(candidateTime);
-    if (candidateHour >= endHour) {
-        nextTime.setDate(nextTime.getDate() + 1);
-    }
-    nextTime.setHours(startHour, 0, 0, 0);
-    return nextTime;
+    const parts = getTzParts(candidateTime, tz);
+    const nextParts = candidateHour >= endHour ? addDaysParts(parts, 1) : parts;
+    return zonedLocalTime(tz, nextParts.year, nextParts.month, nextParts.day, startHour, 0);
 }
 
 export function getHourInTimezone(date, timezone = "Asia/Kolkata") {

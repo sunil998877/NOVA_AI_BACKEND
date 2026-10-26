@@ -4,6 +4,22 @@ import { mapRow } from "./mapRow.js";
 
 const { table, columns, updatable } = callbackSchema;
 const UPDATABLE = new Set(updatable);
+const TERMINAL_LEAD_STATUSES = new Set([
+    "CLOSED_WON",
+    "CLOSED_LOST",
+    "CLOSED_UNQUALIFIED",
+    "SUPPRESSED_DNC",
+]);
+
+export function isHandoffBackfillLead(lead = {}) {
+    const status = String(lead.status || "").toUpperCase();
+    const nextAction = String(lead.next_action || "").toUpperCase();
+    if (lead.do_not_contact) return false;
+    if (TERMINAL_LEAD_STATUSES.has(status)) return false;
+    return status === "CALLBACK_SCHEDULED"
+        || nextAction === "REP_CALLBACK"
+        || Boolean(lead.callback_due);
+}
 
 export const Callback = {
     async create(data) {
@@ -112,6 +128,20 @@ export const Callback = {
         return rows[0] ? mapRow(rows[0]) : null;
     },
 
+    async listOverdue(limit = 50) {
+        const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+        const rows = await query(
+            `SELECT c.*, l.name as lead_name, l.email as lead_email, l.phone as lead_phone, l.company as lead_company,
+                    l.priority as priority, l.health as lead_health, l.status as lead_status
+             FROM ${table} c
+             LEFT JOIN leads l ON c.lead_id = l.id
+             WHERE c.status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED') AND c.due_at < NOW()
+             ORDER BY c.due_at ASC
+             LIMIT ${safeLimit}`
+        );
+        return rows.map(mapRow);
+    },
+
     async list(orgId, { status = "", assigned_rep_id = null, overdue = false, limit = 50, skip = 0 } = {}) {
         const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
         const safeSkip = Math.max(Number(skip) || 0, 0);
@@ -178,7 +208,7 @@ export const Callback = {
                AND l.do_not_contact = 0
                AND l.status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
                AND (
-                    l.status IN ('INTERESTED', 'CALLBACK_SCHEDULED', 'QUALIFIED')
+                    l.status = 'CALLBACK_SCHEDULED'
                     OR l.next_action = 'REP_CALLBACK'
                     OR l.callback_due IS NOT NULL
                )

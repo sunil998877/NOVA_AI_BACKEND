@@ -792,7 +792,26 @@ export async function runMigrations(pool) {
         migrateMukhStyleEmailEngine(pool),
         migrateLeadEventIdempotency(pool),
         migrateFollowUpSequences(pool),
+        migrateOrgOperatingMode(pool),
     ]);
+}
+
+async function migrateOrgOperatingMode(pool) {
+    try {
+        const [rows] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'organizations' AND COLUMN_NAME = 'operating_mode'`
+        );
+        if (!rows.length) {
+            await pool.query(
+                `ALTER TABLE organizations
+                 ADD COLUMN operating_mode VARCHAR(32) NOT NULL DEFAULT 'FULLY_AUTOMATED' AFTER settings`
+            );
+            console.log("[Migration] Added column 'operating_mode' to organizations");
+        }
+    } catch (error) {
+        console.warn("[Migration] migrateOrgOperatingMode warning:", error.message);
+    }
 }
 
 

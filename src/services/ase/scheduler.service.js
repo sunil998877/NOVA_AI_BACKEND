@@ -5,7 +5,7 @@ import { Callback } from "../../models/callback.model.js";
 import { Call } from "../../models/call.model.js";
 import { emailAdapter } from "./adapters/email.adapter.js";
 import { voiceAdapter } from "./adapters/voice.adapter.js";
-import { normalizeChannelOutcome } from "./outcomeNormalizer.service.js";
+import { normalizeChannelOutcome, ASE_OUTCOMES } from "./outcomeNormalizer.service.js";
 import { OrchestratorService } from "./orchestrator.service.js";
 import { validateDispatchEligibility } from "./complianceGate.service.js";
 import { transitionLeadState } from "./leadStateMachine.js";
@@ -14,6 +14,8 @@ import { followUpEngine } from "../followup/followUpEngine.service.js";
 import { followUpScheduler } from "../followup/followUpScheduler.service.js";
 import { isCompanyResearchPending } from "./companyResearch.service.js";
 import { calculateNextCallingTime } from "./callingHours.service.js";
+import { applyOperatingModeGate } from "./operatingModeGate.service.js";
+import { pollOpenPlivoCalls, schedulePlivoCallSync } from "./plivoCallPoll.service.js";
 import { env } from "../../config/env.js";
 
 class AseScheduler {
@@ -69,6 +71,9 @@ class AseScheduler {
             await this.executeDueActions();
             await this.checkOverdueCallbacks();
             await followUpScheduler.processDueTasks().catch(() => {});
+            await pollOpenPlivoCalls().catch((err) => {
+                console.warn("[ASE Scheduler] Plivo call poll failed:", err.message);
+            });
         } catch (error) {
             console.error("[ASE Scheduler] Error during cycle:", error.message);
         } finally {
@@ -133,20 +138,34 @@ class AseScheduler {
         const orgId = Number(lead.organization_id || 1);
         const action = lead.next_action;
         const freshLead = await Lead.findById(lead.id, orgId);
-        const force = Boolean(options.force || env.bypassTimingGates);
+        const force = Boolean(options.force);
+        const skipTiming = force || env.bypassTimingGates;
 
         if (!freshLead || freshLead.do_not_contact || freshLead.next_action !== action) {
             return { executed: false, reason: "Lead missing, DNC, or action changed" };
         }
 
-        if (action === "EMAIL" && !force && isCompanyResearchPending(freshLead)) {
+        const dispatchGate = await applyOperatingModeGate(freshLead, action, {
+            approved: Boolean(options.approved),
+            manual: Boolean(options.manual),
+        });
+        if (!dispatchGate.allowed) {
+            return {
+                executed: false,
+                reason: dispatchGate.reason,
+                queued: Boolean(dispatchGate.queued),
+                approvalId: dispatchGate.approval?.id || null,
+            };
+        }
+
+        if (action === "EMAIL" && !skipTiming && isCompanyResearchPending(freshLead)) {
             return { executed: false, reason: "Company research still pending" };
         }
 
         const timeStr = freshLead.next_action_time ? new Date(freshLead.next_action_time).toISOString() : new Date().toISOString();
         const idempotencyKey = `exec_${orgId}_${freshLead.id}_${action}_${timeStr}`;
 
-        const claim = await AseExecution.claim({
+        let claim = await AseExecution.claim({
             organization_id: orgId,
             lead_id: freshLead.id,
             idempotency_key: idempotencyKey,
@@ -159,29 +178,32 @@ class AseScheduler {
                 const createdAt = new Date(existing.created_at || existing.createdAt || 0).getTime();
                 if (Date.now() - createdAt > 45000) {
                     await AseExecution.complete(existing.id, "FAILED", { error: "Execution lock expired" });
+                    const retry = await AseExecution.claim({
+                        organization_id: orgId,
+                        lead_id: freshLead.id,
+                        idempotency_key: `${idempotencyKey}_retry_${Date.now()}`,
+                        action_type: action,
+                    });
+                    if (!retry.claimed) {
+                        return { executed: false, reason: "Execution already in progress" };
+                    }
+                    claim = retry;
                 } else {
                     return { executed: false, reason: "Execution already in progress" };
                 }
             } else {
-                const counters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
-                const targetStatus = (counters.total || 0) > 0 ? (freshLead.status === "QUEUED" ? "CONTACTED" : freshLead.status) : "NEW";
-                await Lead.updateById(
-                    freshLead.id,
-                    { next_action: null, next_action_time: null, status: targetStatus },
-                    orgId
-                );
                 return { executed: false, reason: "Duplicate execution claim" };
             }
         }
 
-        if (force) {
+        if (skipTiming) {
             console.log(`[ASE Scheduler] Timing gates bypassed for lead ${freshLead.id} action=${action}`);
         }
 
         const eligibility = await validateDispatchEligibility(freshLead, action, {
-            isEngagementTrigger: force || freshLead.status === "ENGAGED" || action === "CALL",
-            bypassCallingHours: force || (action === "CALL" && freshLead.status === "ENGAGED"),
-            bypassCooldown: force,
+            isEngagementTrigger: skipTiming || action === "CALL",
+            bypassCallingHours: skipTiming,
+            bypassCooldown: skipTiming,
         });
         if (!eligibility.eligible) {
             await AseExecution.complete(claim.executionId, "CANCELLED", { reason: eligibility.reason });
@@ -258,9 +280,9 @@ class AseScheduler {
                     await Lead.updateById(
                         freshLead.id,
                         {
-                            status: "ATTEMPTED",
-                            next_action: null,
-                            next_action_time: null,
+                            status: freshLead.status === "NEW" || freshLead.status === "QUEUED" ? "CONTACTED" : freshLead.status,
+                            next_action: "CALL",
+                            next_action_time: new Date(Date.now() + 15 * 60 * 1000),
                         },
                         orgId
                     );
@@ -277,11 +299,12 @@ class AseScheduler {
                 }
 
                 const providerUuid = result.metadata?.providerCallId || result.metadata?.callId;
-                await Call.updateById(orgId, callRecord.id, {
+                const initiatedCall = await Call.updateById(orgId, callRecord.id, {
                     provider_call_uuid: providerUuid,
                     provider_status: "initiated",
                     normalized_outcome: "INITIATED",
                 });
+                schedulePlivoCallSync(initiatedCall || { ...callRecord, provider_call_uuid: providerUuid });
 
                 const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
                 currentCounters.voice = (currentCounters.voice || 0) + 1;
@@ -296,10 +319,25 @@ class AseScheduler {
                         status: nextStatus,
                         attempt_counters: currentCounters,
                         last_contacted_at: new Date(),
+                        next_action: null,
                         next_action_time: null,
                     },
                     orgId
                 );
+
+                if (result.rawResponse?.simulated || result.metadata?.simulated) {
+                    await OrchestratorService.handleOutcomeEvent(
+                        { ...freshLead, status: nextStatus, attempt_counters: currentCounters },
+                        ASE_OUTCOMES.AMBIGUOUS,
+                        {
+                            channel: "VOICE",
+                            simulated: true,
+                            isAnswered: false,
+                            callStatus: "completed",
+                            callId: callRecord.id,
+                        }
+                    ).catch((err) => console.error("[ASE] Simulated call outcome failed:", err.message));
+                }
 
                 await eventBus.publish("ActionCompleted", {
                     organization_id: orgId,
@@ -407,11 +445,28 @@ class AseScheduler {
                 }
 
                 const outcome = normalizeChannelOutcome("EMAIL", result.rawResponse);
+                const emailedLead = {
+                    ...freshLead,
+                    status: nextStatus,
+                    attempt_counters: currentCounters,
+                    last_contacted_at: new Date(),
+                };
                 await OrchestratorService.handleOutcomeEvent(
-                    { ...freshLead, status: nextStatus, attempt_counters: currentCounters },
+                    emailedLead,
                     outcome,
-                    { channel: "EMAIL", ...result.metadata }
+                    {
+                        channel: "EMAIL",
+                        skipNextActionSchedule: currentCounters.email === 1,
+                        ...result.metadata,
+                    }
                 );
+
+                if (currentCounters.email === 1) {
+                    const latest = await Lead.findById(freshLead.id, orgId);
+                    await OrchestratorService.schedulePostFirstEmailAction(latest || emailedLead).catch((err) => {
+                        console.error("[ASE] Post-first-email call schedule failed:", err.message);
+                    });
+                }
 
                 await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
                 return { executed: true, action: "EMAIL" };
@@ -435,17 +490,18 @@ class AseScheduler {
 
     async checkOverdueCallbacks() {
         try {
-            const rows = await Callback.list(1, { overdue: true, limit: 50 });
+            const rows = await Callback.listOverdue(50);
             for (const cb of rows) {
                 if (cb.status === "OPEN" || cb.status === "SCHEDULED" || cb.status === "DUE") {
-                    await Callback.updateById(cb.organization_id || 1, cb.id, {
+                    const cbOrg = Number(cb.organization_id || 1);
+                    await Callback.updateById(cbOrg, cb.id, {
                         status: "OVERDUE",
                         sla_status: "BREACHED",
                         sla_breached_at: new Date(),
                     });
-                    await Lead.updateById(cb.lead_id, { health: "RED" }, cb.organization_id || 1);
+                    await Lead.updateById(cb.lead_id, { health: "RED" }, cbOrg);
                     await eventBus.publish("CallbackSlaBreached", {
-                        organization_id: cb.organization_id || 1,
+                        organization_id: cbOrg,
                         lead_id: cb.lead_id,
                         channel: "SYSTEM",
                         status: "OVERDUE",

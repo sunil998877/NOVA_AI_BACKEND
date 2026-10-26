@@ -22,9 +22,9 @@ export const followUpContentService = {
         const firstName = safeLead.first_name || (safeLead.name ? safeLead.name.split(" ")[0] : "there");
         const initialSubject = initialContext.subject || meta.outreach_email?.subject || `${company}: a note on growth`;
         const senderName = initialContext.senderName || "NOVA AI";
-        const industry = research.industry || "your industry";
-        const offering = research.coreServices || research.summary || "modern digital solutions";
-        const targetAudience = research.targetAudience || "your enterprise clients";
+        const industry = research.industry || "";
+        const offering = research.coreServices || research.summary || company;
+        const targetAudience = research.targetAudience || company;
 
         if (!shouldBypassAi(options)) {
             const client = getOpenAiClient();

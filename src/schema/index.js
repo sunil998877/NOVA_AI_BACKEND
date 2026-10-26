@@ -24,6 +24,7 @@ import { senderAccountSchema } from "./sender-account.schema.js";
 import { emailDeliverySchema } from "./email-delivery.schema.js";
 import { followUpSequenceSchema, followUpEnrollmentSchema, followUpTaskSchema, followUpAutomationSchema } from "./follow-up.schema.js";
 import { salesPlaybookSchema } from "./sales-playbook.schema.js";
+import { aseApprovalSchema } from "./ase-approval.schema.js";
 
 export const schemas = [
     organizationSchema,
@@ -55,6 +56,7 @@ export const schemas = [
     followUpTaskSchema,
     followUpAutomationSchema,
     salesPlaybookSchema,
+    aseApprovalSchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);
@@ -78,4 +80,5 @@ export {
     followUpTaskSchema,
     followUpAutomationSchema,
     salesPlaybookSchema,
+    aseApprovalSchema,
 };

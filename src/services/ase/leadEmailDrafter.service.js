@@ -1,6 +1,6 @@
 import { getOpenAiClient } from "../../controllers/OpenAI/client.js";
 import { env } from "../../config/env.js";
-import { heuristicResearch, loadCompanyContext, rememberCompanyResearch } from "./companyResearch.service.js";
+import { heuristicResearch, loadCompanyContext, rememberCompanyResearch, researchCompany } from "./companyResearch.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { bodyToHtml, formatFirstName, sanitizeOutreachEmail } from "../../utils/outreachEmail.js";
@@ -79,69 +79,23 @@ export async function draftCompanyPersonalizedEmail(lead, options = {}) {
     const role = lead.title || lead.segment_attributes?.title || "";
     const context = await loadCompanyContext(company, { domain: emailDomain, leadInfo: lead });
     const client = getOpenAiClient();
-
-    if (client && context.cachedResearch?.summary) {
+    let research = context.cachedResearch || null;
+    if (!research?.summary) {
         try {
-            const fromCache = await writeEmailFromResearch(client, {
-                firstName, company, role, senderName, research: context.cachedResearch,
-            });
-            if (fromCache) return { ...fromCache, research: context.cachedResearch };
+            research = await researchCompany(company, { domain: emailDomain, leadInfo: lead });
         } catch {}
     }
 
-    if (client && !context.cachedResearch && (context.siteData?.title || context.siteData?.description)) {
+    if (client && research?.summary) {
         try {
-            const completion = await client.chat.completions.create({
-                model: "gpt-4o-mini",
-                temperature: 0.4,
-                response_format: { type: "json_object" },
-                messages: [
-                    { role: "system", content: "Analyze the company, then write one professional email from that analysis. Output valid JSON only." },
-                    { role: "user", content: `Company: ${context.effectiveCompany}
-Domain: ${context.effectiveDomain || emailDomain || "unknown"}
-Website title: ${context.siteData?.title || "N/A"}
-Website description: ${context.siteData?.description || "N/A"}
-Recipient first name: ${firstName}
-Role: ${role || "Decision maker"}
-Sender: ${senderName}
-
-Return JSON:
-{
-  "summary": "2 sentences on what the company does",
-  "coreServices": "their main offerings",
-  "industry": "industry",
-  "targetAudience": "who they sell to",
-  "growthOpportunity": "one concrete reason to talk",
-  "subject": "professional subject under 9 words",
-  "text": "plain email under 140 words",
-  "html": "same email with paragraph tags"
-}
-Use only the website signals. No invented metrics. No exclamation marks. Never use placeholders like [Your Name]. Close with Best regards, ${senderName} and nothing else.` },
-                ],
+            const fromResearch = await writeEmailFromResearch(client, {
+                firstName, company, role, senderName, research,
             });
-            const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
-            if (parsed.summary && parsed.subject && (parsed.html || parsed.text)) {
-                const research = {
-                    company: context.effectiveCompany,
-                    summary: parsed.summary,
-                    coreServices: parsed.coreServices || "",
-                    industry: parsed.industry || "",
-                    targetAudience: parsed.targetAudience || "",
-                    growthOpportunity: parsed.growthOpportunity || "",
-                    source: "ai_intelligence",
-                };
-                rememberCompanyResearch(context.effectiveDomain, context.effectiveCompany, research);
-                const drafted = attachQuality({
-                    subject: parsed.subject,
-                    text: parsed.text || String(parsed.html).replace(/<[^>]+>/g, ""),
-                    html: parsed.html || bodyToHtml(parsed.text),
-                }, research, senderName);
-                if (drafted.qualityChecks.eligibleToSend) return drafted;
-            }
+            if (fromResearch) return { ...fromResearch, research };
         } catch {}
     }
 
-    const research = context.cachedResearch || heuristicResearch(context);
+    research = research || heuristicResearch(context);
     rememberCompanyResearch(context.effectiveDomain, context.effectiveCompany, research);
     return conservativeEmail({ firstName, company, senderName, research });
 }

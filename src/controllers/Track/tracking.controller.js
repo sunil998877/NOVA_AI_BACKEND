@@ -7,6 +7,7 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { Mail } from "../../models/mail.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { Lead } from "../../models/lead.model.js";
+import { User } from "../../models/user.model.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { detectEmailScanner } from "../../utils/emailScannerDetector.js";
 import { eventBus } from "../../services/ase/eventBus.service.js";
@@ -44,7 +45,7 @@ export const trackAseOpen = asyncHandler(async (req, res) => {
     const ipAddress = getClientIp(req);
     const lead = leadId ? await Lead.findById(leadId) : null;
     const storedToken = lead?.metadata?.outreach_open_token;
-    const tokenOk = storedToken ? token === storedToken : true;
+    const tokenOk = Boolean(storedToken && token && token === storedToken);
     if (lead && tokenOk) {
       const scannerResult = detectEmailScanner(userAgent, ipAddress);
       console.log(`[TrackAseOpen] lead=${lead.id} scanner=${scannerResult.isScanner || false}`);
@@ -154,10 +155,20 @@ export const trackClick = asyncHandler(async (req, res) => {
   return res.redirect(302, redirectTo);
 });
 
+async function resolveMailOrgId(mail) {
+  if (!mail) return null;
+  if (mail.organization_id) return Number(mail.organization_id);
+  if (mail.user_id) {
+    const user = await User.findById(mail.user_id).catch(() => null);
+    if (user?.organization_id) return Number(user.organization_id);
+  }
+  return null;
+}
+
 export const trackUnsubscribe = asyncHandler(async (req, res) => {
   const mailId = req.params.mailId || req.params.recipientId;
-  const campaignId = req.params.campaignId;
   let email = req.query.email ? String(req.query.email).toLowerCase().trim() : "";
+  let orgId = null;
 
   if (mailId) {
     try {
@@ -165,18 +176,19 @@ export const trackUnsubscribe = asyncHandler(async (req, res) => {
       if (mail && mail.email) {
         email = mail.email.toLowerCase().trim();
       }
+      orgId = await resolveMailOrgId(mail);
     } catch (_) { }
   }
 
-  if (email) {
+  if (email && orgId) {
     try {
-      await Suppression.add(1, "EMAIL", email, "Unsubscribed via email link");
-      const existingLead = await Lead.findByEmail(1, email);
+      await Suppression.add(orgId, "EMAIL", email, "Unsubscribed via email link");
+      const existingLead = await Lead.findByEmail(orgId, email);
       if (existingLead) {
         await Lead.updateById(
           existingLead.id,
           { status: "SUPPRESSED_DNC", do_not_contact: 1, next_action: null, next_action_time: null },
-          1
+          orgId
         );
       }
     } catch (_) { }

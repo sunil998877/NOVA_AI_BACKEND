@@ -2,6 +2,7 @@ import { Lead } from "../../models/lead.model.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { aseDecisionEngine } from "../../services/ase/brain/aseDecisionEngine.service.js";
 import { modelEvaluationService } from "../../services/ase/brain/modelEvaluation.service.js";
+export { getOperatingModeStatus, updateOperatingMode } from "../Ase/operating-mode.controller.js";
 
 export const getLeadDecision = asyncHandler(async (req, res) => {
     const orgId = Number(req.user?.organization_id || 1);

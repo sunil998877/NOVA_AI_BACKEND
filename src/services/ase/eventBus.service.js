@@ -88,7 +88,7 @@ class EventBusService extends EventEmitter {
         try {
             const io = getIo();
             if (io) {
-                io.emit("ase:lead_event", envelope);
+                io.to(`org:${envelope.organization_id}`).emit("ase:lead_event", envelope);
             }
         } catch (_) {}
 

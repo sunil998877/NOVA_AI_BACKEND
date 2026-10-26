@@ -8,7 +8,13 @@ import { aseScheduler } from "../../services/ase/scheduler.service.js";
 import { eventBus } from "../../services/ase/eventBus.service.js";
 import { query } from "../../config/db.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
-import { normalizeTelephonyOutcome, ASE_OUTCOMES } from "../../services/ase/outcomeNormalizer.service.js";
+import { extractCallTranscript, ASE_OUTCOMES } from "../../services/ase/outcomeNormalizer.service.js";
+import { validateDispatchEligibility } from "../../services/ase/complianceGate.service.js";
+import { applyPlivoCallPayload } from "../../services/ase/voiceOutcomeApply.service.js";
+import { schedulePlivoCallSync } from "../../services/ase/plivoCallPoll.service.js";
+import { enqueuePendingApproval } from "../../services/ase/approvalQueue.service.js";
+import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
+import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
 
 const normalizePhone = (num) => {
     if (!num) return "";
@@ -18,11 +24,15 @@ const normalizePhone = (num) => {
 export const handlePlivoAnswer = asyncHandler(async (req, res) => {
     const payload = { ...(req.query || {}), ...(req.body || {}) };
     const callUuid = payload.CallUUID || payload.CallId || payload.request_uuid;
-    const orgId = Number(payload.orgId || payload.organization_id || 1);
+    let orgId = Number(payload.orgId || payload.organization_id || 0);
     const leadId = payload.leadId ? Number(payload.leadId) : null;
     const leadName = payload.leadName || "there";
     const customMessage = payload.message;
-    const lead = leadId ? await Lead.findById(leadId, orgId).catch(() => null) : null;
+    if (callUuid) {
+        const existingCall = await Call.findByProviderUuidAnyOrg(callUuid);
+        if (existingCall?.organization_id) orgId = Number(existingCall.organization_id);
+    }
+    const lead = leadId && orgId ? await Lead.findById(leadId, orgId).catch(() => null) : null;
 
     if (callUuid) {
         await TelephonyWebhookEvent.recordEvent({
@@ -66,194 +76,8 @@ export const handlePlivoAnswer = asyncHandler(async (req, res) => {
 
 export const handlePlivoStatus = asyncHandler(async (req, res) => {
     const payload = { ...(req.query || {}), ...(req.body || {}) };
-    const callUuid = payload.CallUUID || payload.CallId || payload.request_uuid;
-    const orgId = Number(payload.orgId || payload.organization_id || 1);
-    const callStatus = String(payload.CallStatus || payload.Status || payload.call_status || "unknown");
-    const rawDuration = Number(payload.Duration || payload.call_duration || 0);
-    const rawBillDuration = Number(payload.BillDuration || payload.billed_duration || 0);
-    const hangupCause = payload.HangupCause || payload.hangup_cause_name || null;
-    const totalAmount = payload.TotalAmount || payload.total_amount || null;
-    const answerTime = payload.AnswerTime || payload.answer_time || null;
-    const endTime = payload.EndTime || payload.end_time || null;
-    const speechResult = payload.SpeechResult || payload.transcript || payload.Text || "";
-
-    const dedup = await TelephonyWebhookEvent.recordEvent({
-        organization_id: orgId,
-        provider: "plivo",
-        provider_call_uuid: callUuid,
-        event_type: callStatus,
-        payload,
-    });
-
-    if (dedup.isDuplicate) {
-        return res.status(200).json({ status: "duplicate_ignored", callUuid });
-    }
-
-    const normalized = normalizeTelephonyOutcome({
-        ...payload,
-        CallStatus: callStatus,
-        Duration: rawDuration,
-        BillDuration: rawBillDuration,
-        HangupCause: hangupCause,
-        AnswerTime: answerTime,
-        SpeechResult: speechResult,
-    });
-
-    let existingCall = null;
-    if (callUuid) {
-        existingCall = await Call.findByProviderUuid(orgId, callUuid);
-    }
-
-    if (!existingCall && payload.callId) {
-        existingCall = await Call.findById(orgId, payload.callId);
-    }
-
-    if (!existingCall && callUuid) {
-        const createResult = await Call.create({
-            organization_id: orgId,
-            lead_id: payload.leadId ? Number(payload.leadId) : null,
-            provider_call_uuid: callUuid,
-            phone_number: payload.To || payload.to || "Unknown",
-            from_number: payload.From || payload.from || null,
-            call_channel: "VOICE",
-            call_type: "OUTBOUND",
-            initiation_source: payload.manual ? "MANUAL" : "AUTONOMOUS_AI",
-            provider_status: callStatus,
-            normalized_outcome: normalized.normalizedOutcome,
-            business_disposition: normalized.disposition,
-            is_answered: normalized.isAnswered ? 1 : 0,
-            duration_sec: rawDuration,
-            billable_duration_sec: rawBillDuration,
-            cost: totalAmount ? Number(totalAmount) : null,
-            cost_status: totalAmount ? "FINAL" : "PENDING",
-            hangup_cause: hangupCause,
-            answered_at: answerTime ? new Date(answerTime) : (normalized.isAnswered ? new Date() : null),
-            completed_at: endTime ? new Date(endTime) : new Date(),
-            raw_metadata: payload,
-        });
-        existingCall = createResult.call;
-    } else if (existingCall) {
-        const callUpdates = {
-            provider_status: callStatus,
-            normalized_outcome: normalized.normalizedOutcome,
-            duration_sec: Math.max(existingCall.duration_sec || 0, rawDuration),
-            billable_duration_sec: Math.max(existingCall.billable_duration_sec || 0, rawBillDuration),
-            hangup_cause: hangupCause || existingCall.hangup_cause,
-            raw_metadata: payload,
-        };
-
-        if (normalized.disposition && normalized.disposition !== "unspecified") {
-            callUpdates.business_disposition = normalized.disposition;
-        }
-
-        if (normalized.isAnswered) {
-            callUpdates.is_answered = 1;
-            if (!existingCall.answered_at) {
-                callUpdates.answered_at = answerTime ? new Date(answerTime) : new Date();
-            }
-        }
-
-        if (totalAmount !== null && totalAmount !== undefined) {
-            callUpdates.cost = Number(totalAmount);
-            callUpdates.cost_status = "FINAL";
-        }
-
-        const isTerminal = [
-            "completed",
-            "busy",
-            "no-answer",
-            "timeout",
-            "failed",
-            "canceled",
-            "cancelled",
-            "rejected",
-        ].includes(callStatus.toLowerCase());
-
-        if (isTerminal && !existingCall.completed_at) {
-            callUpdates.completed_at = endTime ? new Date(endTime) : new Date();
-        }
-
-        existingCall = await Call.updateById(orgId, existingCall.id, callUpdates);
-    }
-
-    const leadId = payload.leadId || payload.lead_id || existingCall?.lead_id;
-    if (leadId) {
-        const lead = await Lead.findById(leadId, orgId);
-        if (lead) {
-            const isFinalState = [
-                "completed",
-                "busy",
-                "no-answer",
-                "timeout",
-                "failed",
-                "canceled",
-                "cancelled",
-                "rejected",
-            ].includes(callStatus.toLowerCase());
-
-            if (isFinalState) {
-                if (normalized.isAnswered) {
-                    await Lead.updateById(
-                        lead.id,
-                        {
-                            status: lead.status === "NEW" || lead.status === "DISPATCH_CALL" ? "CONTACTED" : lead.status,
-                            last_contacted_at: new Date(),
-                        },
-                        orgId
-                    );
-
-                    if (
-                        normalized.normalizedOutcome === ASE_OUTCOMES.CALLBACK ||
-                        normalized.normalizedOutcome === ASE_OUTCOMES.INTERESTED ||
-                        normalized.normalizedOutcome === ASE_OUTCOMES.DNC ||
-                        normalized.normalizedOutcome === ASE_OUTCOMES.NOT_INTERESTED
-                    ) {
-                        await OrchestratorService.handleOutcomeEvent(lead, normalized.normalizedOutcome, {
-                            channel: "VOICE",
-                            provider: "plivo",
-                            callStatus,
-                            callUuid,
-                            callId: existingCall?.id,
-                            duration: rawDuration,
-                            transcript: speechResult,
-                            disposition: normalized.disposition,
-                            rawPayload: payload,
-                        });
-                    }
-
-                    await eventBus.publish("CallCompleted", {
-                        organization_id: orgId,
-                        lead_id: lead.id,
-                        channel: "VOICE",
-                        call_id: existingCall?.id,
-                        provider_call_uuid: callUuid,
-                        duration: rawDuration,
-                        outcome: normalized.normalizedOutcome,
-                        disposition: normalized.disposition,
-                    });
-                } else {
-                    await eventBus.publish("CallFailed", {
-                        organization_id: orgId,
-                        lead_id: lead.id,
-                        channel: "VOICE",
-                        call_id: existingCall?.id,
-                        provider_call_uuid: callUuid,
-                        reason: normalized.reason || hangupCause || callStatus,
-                        outcome: normalized.normalizedOutcome,
-                    });
-                }
-            }
-        }
-    }
-
-    return res.status(200).json({
-        status: "received",
-        callStatus,
-        normalizedOutcome: normalized.normalizedOutcome,
-        isAnswered: normalized.isAnswered,
-        disposition: normalized.disposition,
-        callId: existingCall?.id,
-    });
+    const result = await applyPlivoCallPayload(payload);
+    return res.status(200).json(result);
 });
 
 export const dispatchVoiceCall = asyncHandler(async (req, res) => {
@@ -275,6 +99,15 @@ export const dispatchVoiceCall = asyncHandler(async (req, res) => {
     const cleanedDigits = String(lead.phone || "").replace(/[^\d]/g, "");
     if (cleanedDigits.length < 10 || cleanedDigits.length > 15) {
         return res.status(400).json({ error: "Lead phone number is unverified or invalid" });
+    }
+
+    const eligibility = await validateDispatchEligibility(lead, "CALL", {
+        bypassCallingHours: true,
+        bypassCooldown: true,
+        isEngagementTrigger: true,
+    });
+    if (!eligibility.eligible) {
+        return res.status(400).json({ error: eligibility.reason || "Call is not eligible" });
     }
 
     const idempotencyKey = `manual_dispatch_${orgId}_${lead.id}_${Date.now()}`;
@@ -301,11 +134,12 @@ export const dispatchVoiceCall = asyncHandler(async (req, res) => {
     });
 
     if (result.status === "SUCCEEDED") {
-        await Call.updateById(orgId, callResult.call.id, {
+        const updatedCall = await Call.updateById(orgId, callResult.call.id, {
             provider_call_uuid: result.metadata?.providerCallId,
             provider_status: "initiated",
             normalized_outcome: "INITIATED",
         });
+        schedulePlivoCallSync(updatedCall || { ...callResult.call, provider_call_uuid: result.metadata?.providerCallId });
         return res.status(200).json({ data: { ...result, callId: callResult.call.id } });
     } else {
         await Call.updateById(orgId, callResult.call.id, {
@@ -344,7 +178,11 @@ export const simulateVoiceOutcome = asyncHandler(async (req, res) => {
         return res.status(404).json({ error: "Lead not found" });
     }
 
-    const effectiveOutcome = outcome || plivoVoiceAdapter.extractConversationOutcome(transcript).outcome;
+    const answered = Boolean(isAnswered);
+    const extracted = plivoVoiceAdapter.extractConversationOutcome(transcript);
+    const effectiveOutcome = answered
+        ? (outcome || extracted.outcome)
+        : ASE_OUTCOMES.NO_ANSWER;
     const simUuid = `sim_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
     const callResult = await Call.create({
@@ -357,15 +195,15 @@ export const simulateVoiceOutcome = asyncHandler(async (req, res) => {
         call_type: "OUTBOUND",
         initiation_source: "AUTONOMOUS_AI",
         provider: "plivo_simulator",
-        provider_status: isAnswered ? "completed" : "no-answer",
-        normalized_outcome: isAnswered ? effectiveOutcome : ASE_OUTCOMES.NO_ANSWER,
-        business_disposition: isAnswered ? "simulated" : "no_answer",
-        is_answered: isAnswered ? 1 : 0,
-        duration_sec: isAnswered ? Number(duration) : 0,
-        billable_duration_sec: isAnswered ? Number(duration) : 0,
+        provider_status: answered ? "completed" : "no-answer",
+        normalized_outcome: effectiveOutcome,
+        business_disposition: answered ? "simulated" : "no_answer",
+        is_answered: answered ? 1 : 0,
+        duration_sec: answered ? Number(duration) : 0,
+        billable_duration_sec: answered ? Number(duration) : 0,
         cost: 0,
         cost_status: "FINAL",
-        answered_at: isAnswered ? new Date() : null,
+        answered_at: answered ? new Date() : null,
         completed_at: new Date(),
     });
 
@@ -375,8 +213,9 @@ export const simulateVoiceOutcome = asyncHandler(async (req, res) => {
         callId: callResult.call.id,
         callUuid: simUuid,
         transcript: transcript || "",
-        duration: isAnswered ? Number(duration) : 0,
-        isAnswered,
+        duration: answered ? Number(duration) : 0,
+        isAnswered: answered,
+        callStatus: answered ? "completed" : "no-answer",
     });
 
     const updatedLead = await Lead.findById(leadId, orgId);
@@ -622,11 +461,12 @@ export const makeDirectCall = asyncHandler(async (req, res) => {
 
     if (result.status === "SUCCEEDED") {
         const providerUuid = result.metadata?.providerCallId || result.metadata?.callId;
-        await Call.updateById(orgId, callResult.call.id, {
+        const updatedCall = await Call.updateById(orgId, callResult.call.id, {
             provider_call_uuid: providerUuid,
             provider_status: "initiated",
             normalized_outcome: "INITIATED",
         });
+        schedulePlivoCallSync(updatedCall || { ...callResult.call, provider_call_uuid: providerUuid });
 
         if (targetLead) {
             const counters = typeof targetLead.attempt_counters === "string"
@@ -705,15 +545,38 @@ export const triggerAutonomousCall = asyncHandler(async (req, res) => {
         orgId
     );
 
-    await aseScheduler.processLeadAction(lead, { force: true });
+    const mode = await getOperatingMode(orgId);
+    if (mode === OPERATING_MODES.AI_RECOMMENDED) {
+        const queued = await enqueuePendingApproval({
+            organizationId: orgId,
+            leadId: lead.id,
+            action: "CALL",
+            payload: { source: "autonomous_call_ui" },
+        });
+        return res.status(200).json({
+            data: {
+                lead,
+                executed: false,
+                queued: true,
+                approvalId: queued.approval?.id || null,
+                action: "CALL",
+                operatingMode: mode,
+            },
+        });
+    }
+
+    const flags = executionFlagsForMode(mode, { humanInitiated: true });
+    const result = await aseScheduler.processLeadAction(lead, flags);
     const updated = await Lead.findById(lead.id, orgId);
 
-    return res.status(200).json({
+    return res.status(result?.executed ? 200 : 400).json({
         data: {
             lead: updated,
-            executed: true,
+            executed: Boolean(result?.executed),
             action: "CALL",
+            reason: result?.reason || null,
         },
+        error: result?.executed ? undefined : (result?.reason || "Call did not execute"),
     });
 });
 
@@ -756,6 +619,36 @@ export const queueAutonomousCall = asyncHandler(async (req, res) => {
     }
 
     return res.status(200).json({ data: { lead: updated, scheduledTime } });
+});
+
+function flattenVoicePayload(req) {
+    const payload = { ...(req.query || {}), ...(req.body || {}) };
+    const nested = [payload.variables, payload.data, payload.result, payload.payload, payload.call]
+        .filter((value) => value && typeof value === "object" && !Array.isArray(value));
+    return Object.assign({}, ...nested, payload);
+}
+
+export const handleAgentflowOutcome = asyncHandler(async (req, res) => {
+    const payload = flattenVoicePayload(req);
+    const transcript = extractCallTranscript(payload);
+    const rawStatus = payload.CallStatus || payload.call_status || payload.Status || payload.status;
+    const eventName = String(payload.event || payload.event_type || "").toLowerCase();
+    const looksFinished = Boolean(transcript || payload.disposition || payload.call_disposition)
+        || ["completed", "hangup", "end", "ended", "call_ended", "finished"].includes(eventName);
+    req.body = {
+        ...payload,
+        CallUUID: payload.CallUUID || payload.call_uuid || payload.request_uuid || payload.callUuid,
+        CallStatus: rawStatus || (looksFinished ? "completed" : "in-progress"),
+        SpeechResult: transcript,
+        transcript,
+        Duration: payload.Duration || payload.duration || payload.call_duration || 0,
+        leadId: payload.leadId || payload.lead_id,
+        orgId: payload.orgId || payload.organization_id,
+        HangupCause: payload.HangupCause || payload.hangup_cause || payload.disposition || payload.call_disposition,
+        callId: payload.callId || payload.call_id,
+    };
+    req.query = { ...(req.query || {}), ...req.body };
+    return handlePlivoStatus(req, res);
 });
 
 export const runSchedulerCycle = asyncHandler(async (_req, res) => {

@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { authenticate } from "../middleware/auth.middleware.js";
-import { plivoWebhookAuth } from "../middleware/plivoAuth.middleware.js";
+import { plivoWebhookAuth, agentflowWebhookAuth } from "../middleware/plivoAuth.middleware.js";
 import {
     handlePlivoAnswer,
     handlePlivoStatus,
+    handleAgentflowOutcome,
     dispatchVoiceCall,
     getVoiceConfig,
     simulateVoiceOutcome,
@@ -19,6 +20,7 @@ const router = Router();
 
 router.all("/plivo/answer", plivoWebhookAuth, handlePlivoAnswer);
 router.all("/plivo/status", plivoWebhookAuth, handlePlivoStatus);
+router.all("/plivo/agentflow", agentflowWebhookAuth, handleAgentflowOutcome);
 
 router.get("/history", authenticate, getCallHistory);
 router.get("/call/:id", authenticate, getCallDetails);

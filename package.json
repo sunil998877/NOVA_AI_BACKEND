@@ -8,7 +8,7 @@
   "main": "src/server.js",
   "scripts": {
     "build": "node --check src/server.js",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "check": "node --check src/server.js",
     "start": "node src/server.js",
     "train:ase": "node scripts/train_ase_model.js",

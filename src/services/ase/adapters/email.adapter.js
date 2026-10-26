@@ -148,7 +148,10 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
         }
 
         try {
-            const idempotencyKey = payload.idempotencyKey || `ase_lead_${lead.id}_email_${Date.now()}`;
+            const counters = typeof lead.attempt_counters === "string"
+                ? JSON.parse(lead.attempt_counters || "{}")
+                : (lead.attempt_counters || {});
+            const idempotencyKey = payload.idempotencyKey || `ase_lead_${lead.id}_email_${Number(counters.email || 0)}`;
             const result = await unifiedDeliveryService.deliverSingle({
                 orgId: lead.organization_id || 1,
                 to: lead.email,

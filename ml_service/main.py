@@ -128,9 +128,10 @@ def decide(body: DecideRequest):
     channel = "EMAIL" if action == "EMAIL" else ("VOICE" if action == "CALL" else None)
 
     delay = float(delay_model.predict(vector)[0])
-    delay_hours = int(np.clip(np.rint(delay), 0, 72))
+    delay_hours = float(np.clip(delay, 0, 72))
     if action is None:
-        delay_hours = max(delay_hours, 4)
+        delay_hours = max(delay_hours, 4.0)
+    delay_hours = round(delay_hours, 2)
 
     conversion = float(conversion_model.predict_proba(vector)[0, 1])
     conversion = float(min(0.95, max(0.02, conversion)))

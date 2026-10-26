@@ -46,15 +46,7 @@ export const decisionPolicyService = {
 
         const emailAttempts = Number(features?.emailAttempts || lead.attempt_counters?.email || 0);
         const activeEnrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
-        if (activeEnrollment && emailAttempts > 0) {
-            return {
-                isEligible: false,
-                cooldownRequired: true,
-                terminal: false,
-                candidateActions: [],
-                blockedReasons: ["FOLLOW_UP_CADENCE_ACTIVE"],
-            };
-        }
+        const cadenceActive = Boolean(activeEnrollment && emailAttempts > 0);
 
         const domain = lead.email ? lead.email.split("@")[1] : null;
         const isSuppressed = await Suppression.isSuppressed(orgId, {
@@ -78,6 +70,8 @@ export const decisionPolicyService = {
 
         if (features.emailAttempts >= MAX_EMAILS) {
             blockedReasons.push("EMAIL_FATIGUE_LIMIT_REACHED");
+        } else if (cadenceActive) {
+            blockedReasons.push("FOLLOW_UP_CADENCE_ACTIVE");
         } else if (touchCooldown && features.emailAttempts > 0 && features.linkClicks === 0) {
             blockedReasons.push("TOUCH_GAP_COOLDOWN_ACTIVE");
         } else if (!lead.email) {

@@ -4,7 +4,7 @@ import { buildScaledFeatureVector, minTouchGapHours } from "../services/ase/brai
 import { leadFeatureService } from "../services/ase/brain/leadFeature.service.js";
 import { leadPriorityService } from "../services/ase/brain/leadPriority.service.js";
 import { nextBestActionService } from "../services/ase/brain/nextBestAction.service.js";
-import { heuristicResearch, cleanDomain, isBlockedAddress } from "../services/ase/companyResearch.service.js";
+import { heuristicResearch, cleanDomain, isBlockedAddress, isUsableResearchProfile } from "../services/ase/companyResearch.service.js";
 import { validateEmailDraft } from "../services/ase/emailQuality.service.js";
 import { classifyInteractionIntent } from "../services/ase/brain/intentClassification.service.js";
 import { normalizeChannelOutcome, ASE_OUTCOMES } from "../services/ase/outcomeNormalizer.service.js";
@@ -108,7 +108,26 @@ test("Research profile keeps only source-backed facts", () => {
 
 test("Public mailbox domains are not treated as company domains", () => {
     assert.equal(cleanDomain("gmail.com"), null);
+    assert.equal(cleanDomain("example.com"), null);
     assert.equal(cleanDomain("https://acme.com/about"), "acme.com");
+});
+
+test("Placeholder example.com research is not treated as a real company profile", () => {
+    assert.equal(isUsableResearchProfile({
+        domain: "example.com",
+        summary: "ShieldGrid Security public site title: Example Domain.",
+        qualityStatus: "PARTIAL_RESEARCH",
+    }), false);
+    assert.equal(isUsableResearchProfile({
+        domain: "acme-robotics.com",
+        summary: "Industrial automation for factories",
+        qualityStatus: "ACCEPTABLE",
+    }), true);
+    assert.equal(isUsableResearchProfile({
+        company: "Nimbus Cloud Systems",
+        qualityStatus: "INSUFFICIENT_EVIDENCE",
+        source: "lead_record",
+    }), false);
 });
 
 test("Private addresses are blocked from research fetching", () => {

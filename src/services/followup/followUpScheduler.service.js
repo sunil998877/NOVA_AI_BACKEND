@@ -8,6 +8,8 @@ import { LeadEvent } from "../../models/lead-event.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { unifiedDeliveryService } from "../email/unifiedDelivery.service.js";
 import { eventBus } from "../ase/eventBus.service.js";
+import { canAutoDispatch } from "../ase/operatingMode.service.js";
+import { enqueuePendingApproval } from "../ase/approvalQueue.service.js";
 
 class FollowUpSchedulerService {
     constructor() {
@@ -62,6 +64,18 @@ class FollowUpSchedulerService {
 
         for (const task of dueTasks) {
             const orgId = Number(task.organization_id || 1);
+            const dispatchGate = await canAutoDispatch("EMAIL", { organizationId: orgId });
+            if (!dispatchGate.allowed) {
+                if (dispatchGate.enqueue && task.lead_id) {
+                    await enqueuePendingApproval({
+                        organizationId: orgId,
+                        leadId: task.lead_id,
+                        action: "EMAIL",
+                        payload: { source: "follow_up", taskId: task.id },
+                    }).catch(() => {});
+                }
+                continue;
+            }
 
             const isOrgActive = await FollowUpAutomation.isAutomationActive(orgId);
             if (!isOrgActive) {
@@ -108,7 +122,7 @@ class FollowUpSchedulerService {
                     continue;
                 }
 
-                if (lead.status === "MEETING_BOOKED" || lead.status === "CALLBACK") {
+                if (["MEETING_BOOKED", "CALLBACK", "CALLBACK_SCHEDULED", "INTERESTED", "HANDED_OFF", "WARM_TRANSFER"].includes(lead.status)) {
                     await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Meeting already booked" }, orgId);
                     await FollowUpEnrollment.markMeetingBooked(enrollment.id, orgId);
                     continue;

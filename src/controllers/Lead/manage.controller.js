@@ -10,6 +10,11 @@ import { aseScheduler } from "../../services/ase/scheduler.service.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { query } from "../../config/db.js";
 import { draftCompanyPersonalizedEmail } from "../../services/ase/leadEmailDrafter.service.js";
+import { isUsableResearchProfile } from "../../services/ase/companyResearch.service.js";
+import { enqueueLeadCompanyResearch } from "../../services/leads/companyResearchQueue.js";
+import { getLeadApproval } from "../../services/ase/approvalQueue.service.js";
+import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
+import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
 
 const TERMINAL_STATES = new Set(["CLOSED_WON", "CLOSED_LOST", "CLOSED_UNQUALIFIED", "SUPPRESSED_DNC"]);
 
@@ -17,8 +22,6 @@ export const listLeads = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
-
-    await Callback.ensureHandoffQueue(orgId).catch(() => {});
 
     const { items, total } = await Lead.list(orgId, {
         q: String(req.query.q || ""),
@@ -35,40 +38,26 @@ export const listLeads = asyncHandler(async (req, res) => {
 
 export const getLead = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
-    let lead = await Lead.findById(req.params.id, orgId);
-    if (!lead) {
-        lead = await Lead.findById(req.params.id);
-    }
-    if (!lead) {
-        const callbackRows = await query(
-            `SELECT c.*, u.fullName as rep_name FROM callbacks c LEFT JOIN users u ON c.assigned_rep_id = u.id WHERE c.lead_id = ? OR c.id = ? LIMIT 1`,
-            [req.params.id, req.params.id]
-        );
-        if (callbackRows && callbackRows.length > 0) {
-            const cb = callbackRows[0];
-            lead = {
-                id: Number(req.params.id),
-                name: "Prospective Client",
-                company: null,
-                phone: null,
-                email: null,
-                status: "CALLBACK_SCHEDULED",
-                priority: 50,
-                health: "GREEN",
-                callback: {
-                    id: cb.id,
-                    due_at: cb.due_at,
-                    status: cb.status,
-                    notes: cb.notes,
-                    rep_name: cb.rep_name,
-                },
-            };
-        }
-    }
+    const lead = await Lead.findById(req.params.id, orgId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
+    if (lead.company && !isUsableResearchProfile(lead.metadata?.company_research)) {
+        enqueueLeadCompanyResearch(lead);
+    }
+
     const timeline = await LeadEvent.listByLead(orgId, lead.id, 100).catch(() => []);
-    return res.status(200).json({ data: { lead, timeline: timeline || [] } });
+    const [operatingMode, pendingApproval] = await Promise.all([
+        getOperatingMode(orgId).catch(() => OPERATING_MODES.FULLY_AUTOMATED),
+        getLeadApproval(orgId, lead.id).catch(() => null),
+    ]);
+    return res.status(200).json({
+        data: {
+            lead,
+            timeline: timeline || [],
+            operatingMode,
+            pendingApproval,
+        },
+    });
 });
 
 export const updateLead = asyncHandler(async (req, res) => {
@@ -87,12 +76,23 @@ export const updateLead = asyncHandler(async (req, res) => {
         };
     }
 
-    if (updates.do_not_contact) {
+    const dncFlag = updates.do_not_contact;
+    const markDnc = dncFlag === true || dncFlag === 1 || dncFlag === "1";
+    const clearDnc = dncFlag === false || dncFlag === 0 || dncFlag === "0";
+
+    if (markDnc) {
+        updates.do_not_contact = 1;
         updates.status = "SUPPRESSED_DNC";
         updates.next_action = null;
         updates.next_action_time = null;
         await Suppression.add(orgId, "EMAIL", lead.email, "Marked DNC via UI");
         if (lead.phone) await Suppression.add(orgId, "PHONE", lead.phone, "Marked DNC via UI");
+    } else if (clearDnc) {
+        updates.do_not_contact = 0;
+        if (!newStatus || newStatus === "SUPPRESSED_DNC") {
+            updates.status = "CONTACTED";
+        }
+        await Suppression.removeByContact(orgId, { email: lead.email, phone: lead.phone });
     } else if (newStatus && TERMINAL_STATES.has(newStatus)) {
         updates.next_action = null;
         updates.next_action_time = null;
@@ -139,6 +139,91 @@ export const leadStats = asyncHandler(async (req, res) => {
             byStatus,
             bySource,
             callbacks: callbackStats,
+        },
+    });
+});
+
+function pct(num, den) {
+    const n = Number(num || 0);
+    const d = Number(den || 0);
+    if (!d) return 0;
+    return Math.round((n / d) * 1000) / 10;
+}
+
+export const getAseReports = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+
+    const [speedRows, eventRows, callRows, slaRows] = await Promise.all([
+        query(
+            `SELECT AVG(TIMESTAMPDIFF(MINUTE, created_at, last_contacted_at)) AS avg_minutes,
+                    COUNT(*) AS contacted_count
+             FROM leads
+             WHERE organization_id = ? AND last_contacted_at IS NOT NULL`,
+            [orgId]
+        ),
+        query(
+            `SELECT event_type, channel, COUNT(*) AS c
+             FROM lead_events
+             WHERE organization_id = ?
+             GROUP BY event_type, channel`,
+            [orgId]
+        ),
+        query(
+            `SELECT COUNT(*) AS dials,
+                    SUM(CASE WHEN is_answered = 1 THEN 1 ELSE 0 END) AS connected
+             FROM calls
+             WHERE organization_id = ?`,
+            [orgId]
+        ),
+        query(
+            `SELECT
+                SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed,
+                SUM(CASE WHEN status = 'COMPLETED' AND sla_status = 'MET' THEN 1 ELSE 0 END) AS met,
+                COUNT(*) AS total
+             FROM callbacks
+             WHERE organization_id = ?`,
+            [orgId]
+        ),
+    ]);
+
+    const eventCount = (type, channel = null) => (eventRows || [])
+        .filter((row) => row.event_type === type && (channel == null || row.channel === channel))
+        .reduce((sum, row) => sum + Number(row.c || 0), 0);
+
+    const sent = eventCount("EMAIL_SENT") + eventCount("ActionDispatched", "EMAIL");
+    const opened = eventCount("EMAIL_OPENED");
+    const replied = eventCount("EMAIL_REPLY_RECEIVED");
+    const callbacksQueued = eventCount("CallbackCreated") + eventCount("CALLBACK_CREATED");
+
+    const dials = Number(callRows?.[0]?.dials || 0);
+    const connected = Number(callRows?.[0]?.connected || 0);
+    const completedCallbacks = Number(slaRows?.[0]?.completed || 0);
+    const metCallbacks = Number(slaRows?.[0]?.met || 0);
+    const avgMinutesRaw = speedRows?.[0]?.avg_minutes;
+    const avgMinutes = avgMinutesRaw == null ? null : Math.round(Number(avgMinutesRaw) * 10) / 10;
+
+    return res.status(200).json({
+        data: {
+            speedToLeadMinutes: avgMinutes,
+            contactedCount: Number(speedRows?.[0]?.contacted_count || 0),
+            email: {
+                sent,
+                opened,
+                replied,
+                responseRate: pct(opened + replied, sent),
+            },
+            voice: {
+                dials,
+                connected,
+                callbacks: callbacksQueued,
+                connectRate: pct(connected, dials),
+            },
+            callbacks: {
+                total: Number(slaRows?.[0]?.total || 0),
+                completed: completedCallbacks,
+                met: metCallbacks,
+                slaRate: pct(metCallbacks, completedCallbacks),
+            },
         },
     });
 });
@@ -202,6 +287,15 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
     if (TERMINAL_STATES.has(lead.status)) return res.status(400).json({ error: "Lead is in a terminal state" });
 
     const startedAt = Date.now();
+    if (lead.next_action === "WAIT" || lead.next_action === "REP_CALLBACK") {
+        return res.status(400).json({
+            error: lead.next_action === "REP_CALLBACK"
+                ? "This lead is waiting on a human callback"
+                : "The recommended action is to wait",
+            data: { lead, executed: false },
+        });
+    }
+
     const validActions = new Set(["EMAIL", "CALL"]);
     let action = validActions.has(lead.next_action) ? lead.next_action : null;
 
@@ -223,12 +317,21 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
         }
     }
 
+    const mode = await getOperatingMode(orgId);
+    if (mode === OPERATING_MODES.AI_RECOMMENDED) {
+        return res.status(400).json({
+            error: "AI-Recommended mode requires Approve & send. This will not send on its own.",
+            data: { lead, executed: false, operatingMode: mode },
+        });
+    }
+
     lead = await Lead.updateById(lead.id, {
         next_action: action,
         next_action_time: new Date(),
     }, orgId);
 
-    const result = await aseScheduler.processLeadAction(lead, { force: true });
+    const flags = executionFlagsForMode(mode, { humanInitiated: true });
+    const result = await aseScheduler.processLeadAction(lead, flags);
     const updated = await Lead.findById(lead.id, orgId);
     const elapsedMs = Date.now() - startedAt;
 
