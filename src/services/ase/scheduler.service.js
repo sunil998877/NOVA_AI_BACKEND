@@ -12,6 +12,9 @@ import { transitionLeadState } from "./leadStateMachine.js";
 import { eventBus } from "./eventBus.service.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
 import { followUpScheduler } from "../followup/followUpScheduler.service.js";
+import { isCompanyResearchPending } from "./companyResearch.service.js";
+import { calculateNextCallingTime } from "./callingHours.service.js";
+import { env } from "../../config/env.js";
 
 class AseScheduler {
     constructor() {
@@ -84,6 +87,7 @@ class AseScheduler {
         try {
             const unscheduled = await Lead.findUnscheduledNew(10);
             for (const lead of unscheduled) {
+                if (isCompanyResearchPending(lead)) continue;
                 const orgId = Number(lead.organization_id || 1);
                 const decision = await OrchestratorService.evaluateNextAction(lead);
                 if (decision && decision.action) {
@@ -125,13 +129,18 @@ class AseScheduler {
         }
     }
 
-    async processLeadAction(lead) {
+    async processLeadAction(lead, options = {}) {
         const orgId = Number(lead.organization_id || 1);
         const action = lead.next_action;
         const freshLead = await Lead.findById(lead.id, orgId);
+        const force = Boolean(options.force || env.bypassTimingGates);
 
         if (!freshLead || freshLead.do_not_contact || freshLead.next_action !== action) {
-            return;
+            return { executed: false, reason: "Lead missing, DNC, or action changed" };
+        }
+
+        if (action === "EMAIL" && !force && isCompanyResearchPending(freshLead)) {
+            return { executed: false, reason: "Company research still pending" };
         }
 
         const timeStr = freshLead.next_action_time ? new Date(freshLead.next_action_time).toISOString() : new Date().toISOString();
@@ -145,15 +154,54 @@ class AseScheduler {
         });
 
         if (!claim.claimed) {
-            return;
+            const existing = claim.existing;
+            if (existing && existing.status === "PROCESSING") {
+                const createdAt = new Date(existing.created_at || existing.createdAt || 0).getTime();
+                if (Date.now() - createdAt > 45000) {
+                    await AseExecution.complete(existing.id, "FAILED", { error: "Execution lock expired" });
+                } else {
+                    return { executed: false, reason: "Execution already in progress" };
+                }
+            } else {
+                const counters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
+                const targetStatus = (counters.total || 0) > 0 ? (freshLead.status === "QUEUED" ? "CONTACTED" : freshLead.status) : "NEW";
+                await Lead.updateById(
+                    freshLead.id,
+                    { next_action: null, next_action_time: null, status: targetStatus },
+                    orgId
+                );
+                return { executed: false, reason: "Duplicate execution claim" };
+            }
         }
 
-        const eligibility = await validateDispatchEligibility(freshLead, action);
+        if (force) {
+            console.log(`[ASE Scheduler] Timing gates bypassed for lead ${freshLead.id} action=${action}`);
+        }
+
+        const eligibility = await validateDispatchEligibility(freshLead, action, {
+            isEngagementTrigger: force || freshLead.status === "ENGAGED" || action === "CALL",
+            bypassCallingHours: force || (action === "CALL" && freshLead.status === "ENGAGED"),
+            bypassCooldown: force,
+        });
         if (!eligibility.eligible) {
             await AseExecution.complete(claim.executionId, "CANCELLED", { reason: eligibility.reason });
+            const hoursBlock = /calling hours/i.test(eligibility.reason || "");
+            if (action === "CALL" && hoursBlock) {
+                const later = calculateNextCallingTime(freshLead, { delaySeconds: 0 });
+                await Lead.updateById(
+                    freshLead.id,
+                    { next_action: "CALL", next_action_time: later },
+                    orgId
+                );
+                return { executed: false, reason: eligibility.reason, rescheduled: true };
+            }
+            const keepEmail = action === "EMAIL" && !/consent|suppressed|do_not_contact|terminal/i.test(eligibility.reason || "");
             await Lead.updateById(
                 freshLead.id,
-                { next_action: null, next_action_time: null },
+                {
+                    next_action: keepEmail ? "EMAIL" : null,
+                    next_action_time: keepEmail ? new Date(Date.now() + 15 * 60 * 1000) : null,
+                },
                 orgId
             );
             await eventBus.publish("ActionFailed", {
@@ -163,7 +211,7 @@ class AseScheduler {
                 action,
                 reason: eligibility.reason,
             });
-            return;
+            return { executed: false, reason: eligibility.reason };
         }
 
         try {
@@ -207,6 +255,15 @@ class AseScheduler {
                         failure_reason: result.error || "Provider call creation rejected",
                     });
                     await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
+                    await Lead.updateById(
+                        freshLead.id,
+                        {
+                            status: "ATTEMPTED",
+                            next_action: null,
+                            next_action_time: null,
+                        },
+                        orgId
+                    );
                     await eventBus.publish("ActionFailed", {
                         organization_id: orgId,
                         lead_id: freshLead.id,
@@ -216,7 +273,7 @@ class AseScheduler {
                         status: result.status,
                         metadata: result.metadata || { error: result.error },
                     });
-                    return;
+                    return { executed: false, reason: result.error || "Call provider rejected the request" };
                 }
 
                 const providerUuid = result.metadata?.providerCallId || result.metadata?.callId;
@@ -266,7 +323,7 @@ class AseScheduler {
                 }
 
                 await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
-                return;
+                return { executed: true, action: "CALL", callId: callRecord.id };
             } else if (action === "EMAIL") {
                 await eventBus.publish("ActionDispatched", {
                     organization_id: orgId,
@@ -280,6 +337,15 @@ class AseScheduler {
 
                 if (result.status !== "SUCCEEDED") {
                     await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
+                    await Lead.updateById(
+                        freshLead.id,
+                        {
+                            status: "QUEUED",
+                            next_action: "EMAIL",
+                            next_action_time: new Date(Date.now() + 15 * 60 * 1000),
+                        },
+                        orgId
+                    );
                     await eventBus.publish("ActionFailed", {
                         organization_id: orgId,
                         lead_id: freshLead.id,
@@ -288,7 +354,7 @@ class AseScheduler {
                         status: result.status,
                         metadata: result.metadata || { error: result.error },
                     });
-                    return;
+                    return { executed: false, reason: result.error || "Email delivery failed" };
                 }
 
                 const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
@@ -298,13 +364,25 @@ class AseScheduler {
                 const stateTransition = transitionLeadState(freshLead.status, "EMAIL_SENT");
                 const nextStatus = stateTransition.nextState;
 
+                const enrolled = await followUpEngine.enrollLead(freshLead, {
+                    sentAt: new Date(),
+                    subject: result.metadata?.subject,
+                    messageId: result.metadata?.messageId,
+                    research: result.metadata?.research,
+                    mailId: result.metadata?.mailId,
+                }).catch(() => null);
+                const firstFollowUpAt = enrolled?.tasks?.[0]?.scheduled_at
+                    ? new Date(enrolled.tasks[0].scheduled_at)
+                    : new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+
                 await Lead.updateById(
                     freshLead.id,
                     {
                         status: nextStatus,
                         attempt_counters: currentCounters,
                         last_contacted_at: new Date(),
-                        next_action_time: null,
+                        next_action: currentCounters.email >= 3 ? null : "EMAIL",
+                        next_action_time: currentCounters.email >= 3 ? null : firstFollowUpAt,
                     },
                     orgId
                 );
@@ -317,13 +395,6 @@ class AseScheduler {
                     status: result.status,
                     metadata: result.metadata || { error: result.error },
                 });
-
-                await followUpEngine.enrollLead(freshLead, {
-                    sentAt: new Date(),
-                    subject: result.metadata?.subject,
-                    messageId: result.metadata?.messageId,
-                    research: result.metadata?.research,
-                }).catch(() => {});
 
                 if (stateTransition.changed) {
                     await eventBus.publish("LeadStateChanged", {
@@ -343,9 +414,10 @@ class AseScheduler {
                 );
 
                 await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
+                return { executed: true, action: "EMAIL" };
             } else {
                 await AseExecution.complete(claim.executionId, "CANCELLED", { reason: `Unknown action ${action}` });
-                return;
+                return { executed: false, reason: `Unknown action ${action}` };
             }
         } catch (err) {
             console.error(`[ASE Scheduler] Failed executing ${action} on lead ${freshLead.id}:`, err.message);
@@ -357,6 +429,7 @@ class AseScheduler {
                 action,
                 error: err.message,
             });
+            return { executed: false, reason: err.message };
         }
     }
 

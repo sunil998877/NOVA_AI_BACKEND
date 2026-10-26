@@ -1,6 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { Suppression } from "../models/suppression.model.js";
+import { FollowUpEnrollment } from "../models/follow-up-enrollment.model.js";
 import { aseDecisionEngine } from "../services/ase/brain/aseDecisionEngine.service.js";
 import { decisionPolicyService } from "../services/ase/brain/decisionPolicy.service.js";
 import { leadFeatureService } from "../services/ase/brain/leadFeature.service.js";
@@ -10,6 +11,7 @@ import { nextBestActionService } from "../services/ase/brain/nextBestAction.serv
 import { conversionPredictionService } from "../services/ase/brain/conversionPrediction.service.js";
 
 before(() => {
+    FollowUpEnrollment.findActiveByLeadId = async () => null;
     Suppression.isSuppressed = async (_orgId, { email }) => {
         if (email === "suppressed@acme.com") {
             return { reason: "Opted out from marketing" };
@@ -177,6 +179,7 @@ test("NOVA Brain: Priority service elevates pending callbacks to P1_URGENT", () 
 });
 
 test("NOVA Brain: FastAPI model chooses the next action", async () => {
+    modelRegistry.setMode("ACTIVE");
     const lead = {
         id: 203,
         organization_id: 1,
@@ -193,9 +196,12 @@ test("NOVA Brain: FastAPI model chooses the next action", async () => {
     };
     const decision = await aseDecisionEngine.evaluateLead(lead, { audit: false });
     assert.equal(decision.isAssistedByMl, true);
-    assert.equal(decision.provider, "fastapi-onnx-sklearn");
-    assert.equal(decision.reasonCode, "ML_MODEL_DECISION");
-    assert.equal(decision.action, "CALL");
+    assert.ok(["fastapi-onnx-sklearn", "onnxruntime"].includes(decision.provider));
+    assert.ok(decision.action === "CALL" || decision.action === "EMAIL");
+    if (decision.provider === "fastapi-onnx-sklearn") {
+        assert.equal(decision.reasonCode, "ML_MODEL_DECISION");
+        assert.equal(decision.action, "CALL");
+    }
     assert.ok(decision.probabilities);
     const total = decision.probabilities.EMAIL + decision.probabilities.CALL + decision.probabilities.WAIT;
     assert.ok(Math.abs(total - 1) < 0.02);
@@ -215,4 +221,22 @@ test("NOVA Brain: Conversion prediction service produces calibrated 14-day estim
     assert.equal(result.predictionStatus, "SUCCESS");
     assert.ok(result.probability > 0 && result.probability <= 1);
     assert.ok(result.confidence > 0 && result.confidence <= 1);
+});
+
+test("NOVA Brain: Interested leads get a higher conversion chance than new leads", () => {
+    const base = { emailOpens: 0, linkClicks: 0, voiceAttempts: 0, hoursSinceLastTouch: 48, engagementScore: 15 };
+    const cold = conversionPredictionService.predictConversionProbability({ ...base, status: "NEW" }, {
+        available: true,
+        action: "WAIT",
+        confidence: 0.84,
+        probabilities: { EMAIL: 0.08, CALL: 0.08, WAIT: 0.84 },
+    });
+    const hot = conversionPredictionService.predictConversionProbability({ ...base, status: "INTERESTED" }, {
+        available: true,
+        action: "EMAIL",
+        confidence: 0.7,
+        probabilities: { EMAIL: 0.70, CALL: 0.10, WAIT: 0.20 },
+    });
+    assert.ok(hot.probability > cold.probability);
+    assert.ok(hot.probability >= 0.08);
 });

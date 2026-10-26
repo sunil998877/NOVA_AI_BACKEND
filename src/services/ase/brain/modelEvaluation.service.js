@@ -1,5 +1,19 @@
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { query } from "../../../config/db.js";
 import { modelRegistry } from "./modelRegistry.service.js";
+
+const evaluationPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../models/ml/evaluation.json");
+
+function readHoldoutEvaluation() {
+    if (!fs.existsSync(evaluationPath)) return null;
+    try {
+        return JSON.parse(fs.readFileSync(evaluationPath, "utf-8"));
+    } catch {
+        return null;
+    }
+}
 
 export const modelEvaluationService = {
     async getEvaluationReport(organizationId = 1) {
@@ -32,6 +46,7 @@ export const modelEvaluationService = {
         const shadowAgreementRate = shadowDecisions > 0
             ? Number(((shadowConcurrences / shadowDecisions) * 100).toFixed(2))
             : null;
+        const holdout = readHoldoutEvaluation();
 
         return {
             organizationId: Number(organizationId),
@@ -45,6 +60,13 @@ export const modelEvaluationService = {
             trainingMetrics: {
                 modelAccuracy: status.accuracy ? `${(status.accuracy * 100).toFixed(2)}%` : "N/A",
                 trainingDatasetSize: status.totalSamples || "N/A",
+                dataSource: holdout?.data_source || "unknown",
+                holdout: holdout ? {
+                    actionMacroF1: holdout.action_model?.macro_f1 ?? null,
+                    delayMaeHours: holdout.delay_model?.mae_hours ?? null,
+                    conversionBrier: holdout.conversion_model?.brier ?? null,
+                    limitations: holdout.limitations || [],
+                } : null,
             },
         };
     },

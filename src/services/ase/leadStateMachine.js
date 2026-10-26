@@ -96,6 +96,8 @@ export function createLeadStateMachine(initialState = "NEW") {
             },
             ENGAGED: {
                 on: {
+                    DISPATCH_CALL: "ENGAGED",
+                    CALL_INITIATED: "ENGAGED",
                     INTEREST_DETECTED: "INTERESTED",
                     CALLBACK_REQUESTED: "CALLBACK_SCHEDULED",
                     WARM_TRANSFER: "WARM_TRANSFER",

@@ -1,4 +1,6 @@
 import { Suppression } from "../../../models/suppression.model.js";
+import { FollowUpEnrollment } from "../../../models/follow-up-enrollment.model.js";
+import { minTouchGapHours } from "./featureSchema.js";
 
 const TERMINAL_STATES = new Set([
     "CLOSED_WON",
@@ -9,7 +11,6 @@ const TERMINAL_STATES = new Set([
 
 const MAX_EMAILS = 3;
 const MAX_CALLS = 2;
-const MIN_TOUCH_GAP_HOURS = Number(process.env.ASE_MIN_TOUCH_GAP_HOURS || 2);
 
 export const decisionPolicyService = {
     async evaluateEligibility(lead, features) {
@@ -43,6 +44,18 @@ export const decisionPolicyService = {
             };
         }
 
+        const emailAttempts = Number(features?.emailAttempts || lead.attempt_counters?.email || 0);
+        const activeEnrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
+        if (activeEnrollment && emailAttempts > 0) {
+            return {
+                isEligible: false,
+                cooldownRequired: true,
+                terminal: false,
+                candidateActions: [],
+                blockedReasons: ["FOLLOW_UP_CADENCE_ACTIVE"],
+            };
+        }
+
         const domain = lead.email ? lead.email.split("@")[1] : null;
         const isSuppressed = await Suppression.isSuppressed(orgId, {
             email: lead.email,
@@ -60,9 +73,13 @@ export const decisionPolicyService = {
         }
 
         const candidateActions = [];
+        const hoursSinceTouch = Number(features.hoursSinceLastTouch != null ? features.hoursSinceLastTouch : 999);
+        const touchCooldown = hoursSinceTouch < minTouchGapHours() && (features.emailAttempts > 0 || features.voiceAttempts > 0);
 
         if (features.emailAttempts >= MAX_EMAILS) {
             blockedReasons.push("EMAIL_FATIGUE_LIMIT_REACHED");
+        } else if (touchCooldown && features.emailAttempts > 0 && features.linkClicks === 0) {
+            blockedReasons.push("TOUCH_GAP_COOLDOWN_ACTIVE");
         } else if (!lead.email) {
             blockedReasons.push("MISSING_EMAIL_ADDRESS");
         } else if (lead.email_consent?.status === "DENIED") {
@@ -73,25 +90,21 @@ export const decisionPolicyService = {
 
         if (features.voiceAttempts >= MAX_CALLS) {
             blockedReasons.push("VOICE_FATIGUE_LIMIT_REACHED");
+        } else if (touchCooldown && features.voiceAttempts > 0 && features.linkClicks === 0) {
+            blockedReasons.push("TOUCH_GAP_COOLDOWN_ACTIVE");
         } else if (!lead.phone) {
             blockedReasons.push("MISSING_PHONE_NUMBER");
         } else if (lead.voice_consent?.status === "DENIED") {
-            blockedReasons.push("VOICE_CONSENT_DENIED");
+            blockedReasons.push("VOICE_CONSENT_DENIED", "VOICE_CONSENT_NOT_GRANTED");
+        } else if (lead.voice_consent?.status !== "GRANTED") {
+            blockedReasons.push("VOICE_CONSENT_NOT_GRANTED");
         } else {
             candidateActions.push("CALL");
         }
 
-        let cooldownRequired = false;
-        if (features.emailAttempts > 0 || features.voiceAttempts > 0) {
-            if (features.hoursSinceLastTouch < MIN_TOUCH_GAP_HOURS && features.linkClicks === 0) {
-                cooldownRequired = true;
-                blockedReasons.push("TOUCH_GAP_COOLDOWN_ACTIVE");
-            }
-        }
-
         return {
             isEligible: candidateActions.length > 0,
-            cooldownRequired,
+            cooldownRequired: touchCooldown,
             terminal: false,
             candidateActions,
             blockedReasons,

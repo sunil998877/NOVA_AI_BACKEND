@@ -67,7 +67,7 @@ export const Lead = {
                      cb.notes AS callback_notes,
                      cb_u.fullName AS callback_rep_name
              FROM ${table} l
-             LEFT JOIN users u ON u.id = l.assigned_rep_id
+             LEFT JOIN users u ON u.id = COALESCE(l.assigned_rep_id, l.user_id)
              LEFT JOIN (
                  SELECT c1.id, c1.lead_id, c1.due_at, c1.status, c1.sla_status, c1.notes, c1.assigned_rep_id
                  FROM callbacks c1
@@ -94,6 +94,15 @@ export const Lead = {
         const rows = await query(
             `SELECT ${columns} FROM ${table} WHERE organization_id = ? AND email = ? LIMIT 1`,
             [orgId, String(email).toLowerCase().trim()]
+        );
+        return toLead(rows[0]);
+    },
+
+    async findByEmailAnyOrg(email) {
+        if (!email) return null;
+        const rows = await query(
+            `SELECT ${columns} FROM ${table} WHERE email = ? ORDER BY id DESC LIMIT 1`,
+            [String(email).toLowerCase().trim()]
         );
         return toLead(rows[0]);
     },
@@ -167,7 +176,7 @@ export const Lead = {
                     cb.notes AS callback_notes,
                     cb_u.fullName AS callback_rep_name
              FROM ${table} l
-             LEFT JOIN users u ON u.id = l.assigned_rep_id
+             LEFT JOIN users u ON u.id = COALESCE(l.assigned_rep_id, l.user_id)
              LEFT JOIN (
                  SELECT c1.id, c1.lead_id, c1.due_at, c1.status, c1.sla_status, c1.notes, c1.assigned_rep_id
                  FROM callbacks c1
@@ -180,7 +189,7 @@ export const Lead = {
              ) cb ON cb.lead_id = l.id
              LEFT JOIN users cb_u ON cb.assigned_rep_id = cb_u.id
              WHERE ${whereSql}
-             ORDER BY l.priority DESC, l.created_at DESC LIMIT ${safeLimit} OFFSET ${safeSkip}`,
+             ORDER BY l.created_at DESC, l.priority DESC LIMIT ${safeLimit} OFFSET ${safeSkip}`,
             params
         );
         const countRows = await query(`SELECT COUNT(*) AS total FROM ${table} l WHERE ${whereSql}`, params);
@@ -262,7 +271,9 @@ export const Lead = {
                 serialize("email_consent", data.email_consent || null),
                 serialize("voice_consent", data.voice_consent || null),
                 serialize("whatsapp_consent", data.whatsapp_consent || null),
-                data.assigned_rep_id ? Number(data.assigned_rep_id) : null,
+                data.assigned_rep_id
+                    ? Number(data.assigned_rep_id)
+                    : (data.userId ?? data.user_id ?? null),
                 data.next_action ?? null,
                 data.next_action_time ?? null,
                 data.last_contacted_at ?? null,

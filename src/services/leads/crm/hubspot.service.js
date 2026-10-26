@@ -13,8 +13,6 @@ const cfg = () => env.hubspot;
 
 export const isOAuthConfigured = () => Boolean(cfg().clientId && cfg().clientSecret && cfg().redirectUri);
 
-/* ----------------------------- OAuth ----------------------------- */
-
 export function buildAuthorizeUrl(userId) {
     if (!isOAuthConfigured()) {
         throw new Error("HubSpot OAuth is not configured (HUBSPOT_CLIENT_ID / SECRET / REDIRECT_URI)");
@@ -81,7 +79,6 @@ export async function exchangeCode(userId, code) {
     });
 }
 
-/** Connect with a HubSpot Private App token instead of OAuth (good for dev / single account). */
 export async function connectWithPrivateToken(userId, accessToken) {
     const res = await fetch(`${API_BASE}/crm/v3/objects/contacts?limit=1`, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -124,8 +121,6 @@ async function hubspotFetch(userId, path, options = {}) {
     return data;
 }
 
-/* ----------------------------- Mapping ----------------------------- */
-
 export const toLead = (contact) => {
     const p = contact.properties || {};
     return {
@@ -139,13 +134,6 @@ export const toLead = (contact) => {
     };
 };
 
-/* ----------------------------- Sync ----------------------------- */
-
-/**
- * Pulls contacts from HubSpot and pushes them through the Lead Intake Service.
- * full=true  -> page through every contact
- * full=false -> only contacts modified since last_synced_at (falls back to full)
- */
 export async function syncContacts(userId, { full = false } = {}) {
     const conn = await CrmConnection.find(userId, PROVIDER);
     if (!conn) throw new Error("HubSpot is not connected");
@@ -198,9 +186,6 @@ export async function syncSingleContact(userId, contactId) {
     return processLead(lead, { userId, source: LEAD_SOURCES.CRM_HUBSPOT, updateExisting: true });
 }
 
-/* ----------------------------- Webhook ----------------------------- */
-
-/** Validates HubSpot v3 webhook signature. */
 export function verifyWebhookSignature(req) {
     const secret = cfg().clientSecret;
     if (!secret) return false;
@@ -237,8 +222,6 @@ export async function handleWebhookEvents(events) {
     }
     return results;
 }
-
-/* ----------------------------- Status ----------------------------- */
 
 export async function getStatus(userId) {
     const conn = await CrmConnection.find(userId, PROVIDER);

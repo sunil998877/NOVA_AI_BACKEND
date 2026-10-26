@@ -1,11 +1,14 @@
 import { modelRegistry } from "./modelRegistry.service.js";
+import { minTouchGapHours } from "./featureSchema.js";
 
 export const nextBestActionService = {
     determineNextBestAction({ eligibility, features, priority, prediction }) {
         const { candidateActions, cooldownRequired } = eligibility;
         const status = modelRegistry.getModelStatus();
-
-        const minTouchGap = Number(process.env.ASE_MIN_TOUCH_GAP_HOURS || 2);
+        const minTouchGap = minTouchGapHours();
+        const predictedAction = prediction?.action === null || prediction?.action === undefined
+            ? "WAIT"
+            : String(prediction.action).toUpperCase();
 
         if (candidateActions.length === 0) {
             return {
@@ -18,38 +21,45 @@ export const nextBestActionService = {
             };
         }
 
-        let baselineAction = candidateActions.includes("EMAIL") && features.emailAttempts === 0 
-            ? "EMAIL" 
+        let baselineAction = candidateActions.includes("EMAIL") && features.emailAttempts === 0
+            ? "EMAIL"
             : candidateActions[0];
 
         if (features.voiceAttempts < 2 && features.voiceConsentAllowed && features.emailAttempts > features.voiceAttempts) {
             if (candidateActions.includes("CALL")) baselineAction = "CALL";
         }
 
+        if (priority?.tier === "P1_URGENT" && candidateActions.includes("CALL") && features.voiceConsentAllowed) {
+            baselineAction = "CALL";
+        }
+
         let finalAction = baselineAction;
         let isAssistedByMl = false;
         let shadowPrediction = null;
+        let reasonCode = "DETERMINISTIC_RULES_BASELINE";
 
         if (prediction?.available) {
             if (status.mode === "ACTIVE") {
-                if (prediction.action !== "WAIT" && candidateActions.includes(prediction.action)) {
-                    finalAction = prediction.action;
+                if (predictedAction !== "WAIT" && candidateActions.includes(predictedAction)) {
+                    finalAction = predictedAction;
                     isAssistedByMl = true;
-                } else if (prediction.action === "WAIT") {
+                    reasonCode = prediction.reason_code || "ML_POLICY_OPTIMIZATION";
+                } else if (predictedAction === "WAIT") {
                     if (features.emailAttempts === 0 && features.voiceAttempts === 0) {
                         finalAction = baselineAction;
                         isAssistedByMl = false;
                     } else {
                         finalAction = null;
                         isAssistedByMl = true;
+                        reasonCode = prediction.reason_code || "ML_POLICY_OPTIMIZATION";
                     }
                 }
             } else if (status.mode === "SHADOW") {
                 shadowPrediction = {
-                    action: prediction.action,
+                    action: predictedAction,
                     confidence: prediction.confidence,
                     modelVersion: prediction.modelVersion,
-                    concursWithBaseline: prediction.action === baselineAction,
+                    concursWithBaseline: predictedAction === baselineAction,
                 };
             }
         }
@@ -74,7 +84,8 @@ export const nextBestActionService = {
             isAssistedByMl,
             shadowPrediction,
             confidence: isAssistedByMl ? prediction.confidence : 1.0,
-            reasonCode: isAssistedByMl ? "ML_POLICY_OPTIMIZATION" : "DETERMINISTIC_RULES_BASELINE",
+            reasonCode,
+            policyVersion: "nba-rules-v2",
         };
     },
 };

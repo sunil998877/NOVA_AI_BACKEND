@@ -37,20 +37,20 @@ export const leadPriorityService = {
             basePriority += 25;
         }
 
-        if (features.emailAttempts >= 2 && features.emailOpens === 0) {
+        if (features.emailAttempts >= 2 && features.linkClicks === 0 && features.emailOpens === 0) {
             basePriority -= 15;
         }
 
         const score = Math.max(1, Math.min(99, Math.round(basePriority)));
         let tier = "P3_NORMAL";
-        if (score >= 80) tier = "P2_HIGH";
-        else if (score >= 90) tier = "P1_URGENT";
+        if (score >= 90) tier = "P1_URGENT";
+        else if (score >= 80) tier = "P2_HIGH";
         else if (score < 40) tier = "P4_LOW";
 
         return {
             score,
             tier,
-            reason: `Computed priority score based on lifecycle and engagement`,
+            reason: "Computed from lifecycle state and verified engagement",
         };
     },
 };

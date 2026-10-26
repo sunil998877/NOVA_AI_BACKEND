@@ -28,6 +28,9 @@ const startServer = () => {
         console.log(
             `n8n webhook: ${env.n8nWebhookUrl || env.n8nMainWebhook || "(not configured)"}`
         );
+        if (env.bypassTimingGates) {
+            console.log("[ASE] Timing gates bypassed (calling hours, cadence, cooldown, scanner delay) for local lag testing");
+        }
     });
 
     httpServer.on("error", (error) => {
@@ -35,7 +38,7 @@ const startServer = () => {
         process.exit(1);
     });
 
-    ensureMlService();
+    const mlReady = ensureMlService();
     process.on("SIGINT", () => {
         stopMlService();
         emailReplyListener.stop();
@@ -49,8 +52,16 @@ const startServer = () => {
         process.exit(0);
     });
 
+    process.on("unhandledRejection", (reason) => {
+        console.error("Unhandled Rejection:", reason?.message || reason);
+    });
+    process.on("uncaughtException", (error) => {
+        console.error("Uncaught Exception:", error?.message || error);
+    });
+
     connectDb()
-        .then(() => {
+        .then(async () => {
+            await mlReady;
             aseScheduler.start();
             emailReplyListener.start();
             followUpScheduler.start();

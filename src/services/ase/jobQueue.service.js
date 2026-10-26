@@ -7,7 +7,7 @@ try {
     const bullmq = await import("bullmq");
     BullQueue = bullmq.Queue;
     BullWorker = bullmq.Worker;
-} catch (_) {}
+} catch (_) { }
 
 class JobQueueService {
     constructor() {
@@ -91,7 +91,7 @@ class JobQueueService {
                 );
                 this.metrics.activeWorkers = 1;
                 return;
-            } catch (_) {}
+            } catch (_) { }
         }
 
         this.metrics.activeWorkers = 1;

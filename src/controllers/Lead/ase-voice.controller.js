@@ -1,4 +1,5 @@
 import { plivoVoiceAdapter } from "../../services/ase/adapters/plivoVoice.adapter.js";
+import { tryPlaybookVoice } from "../../services/ase/salesPlaybook.service.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { Call } from "../../models/call.model.js";
@@ -18,8 +19,10 @@ export const handlePlivoAnswer = asyncHandler(async (req, res) => {
     const payload = { ...(req.query || {}), ...(req.body || {}) };
     const callUuid = payload.CallUUID || payload.CallId || payload.request_uuid;
     const orgId = Number(payload.orgId || payload.organization_id || 1);
+    const leadId = payload.leadId ? Number(payload.leadId) : null;
     const leadName = payload.leadName || "there";
     const customMessage = payload.message;
+    const lead = leadId ? await Lead.findById(leadId, orgId).catch(() => null) : null;
 
     if (callUuid) {
         await TelephonyWebhookEvent.recordEvent({
@@ -50,9 +53,11 @@ export const handlePlivoAnswer = asyncHandler(async (req, res) => {
         }
     }
 
+    const playbookVoice = lead ? await tryPlaybookVoice(lead).catch(() => null) : null;
     const xml = plivoVoiceAdapter.generateAnswerXml({
-        message: customMessage,
-        leadName,
+        message: customMessage || playbookVoice?.openingLine,
+        leadName: lead?.name || leadName,
+        lead,
     });
 
     res.set("Content-Type", "application/xml");
@@ -266,6 +271,10 @@ export const dispatchVoiceCall = asyncHandler(async (req, res) => {
 
     if (!lead.phone) {
         return res.status(400).json({ error: "Lead has no phone number configured" });
+    }
+    const cleanedDigits = String(lead.phone || "").replace(/[^\d]/g, "");
+    if (cleanedDigits.length < 10 || cleanedDigits.length > 15) {
+        return res.status(400).json({ error: "Lead phone number is unverified or invalid" });
     }
 
     const idempotencyKey = `manual_dispatch_${orgId}_${lead.id}_${Date.now()}`;
@@ -554,8 +563,8 @@ export const makeDirectCall = asyncHandler(async (req, res) => {
         if (targetLead.do_not_contact) {
             return res.status(400).json({ error: "Lead is flagged as Do Not Contact (DNC)" });
         }
-        targetPhone = targetLead.phone;
-        targetName = targetLead.name || targetName;
+        targetPhone = (phone && String(phone).trim()) ? String(phone).trim() : targetLead.phone;
+        targetName = (name && String(name).trim()) ? String(name).trim() : (targetLead.name || targetName);
     } else if (targetPhone) {
         const norm = normalizePhone(targetPhone);
         if (norm) {
@@ -596,8 +605,9 @@ export const makeDirectCall = asyncHandler(async (req, res) => {
         cost_status: "PENDING",
     });
 
-    const leadObject = targetLead || {
-        id: null,
+    const leadObject = {
+        ...(targetLead || {}),
+        id: targetLead?.id || null,
         name: targetName,
         phone: targetPhone,
         organization_id: orgId,
@@ -680,6 +690,10 @@ export const triggerAutonomousCall = asyncHandler(async (req, res) => {
     if (!lead.phone) {
         return res.status(400).json({ error: "Lead has no phone number" });
     }
+    const trigDigits = String(lead.phone || "").replace(/[^\d]/g, "");
+    if (trigDigits.length < 10 || trigDigits.length > 15) {
+        return res.status(400).json({ error: "Lead phone number is unverified or invalid" });
+    }
 
     lead = await Lead.updateById(
         lead.id,
@@ -691,7 +705,7 @@ export const triggerAutonomousCall = asyncHandler(async (req, res) => {
         orgId
     );
 
-    await aseScheduler.processLeadAction(lead);
+    await aseScheduler.processLeadAction(lead, { force: true });
     const updated = await Lead.findById(lead.id, orgId);
 
     return res.status(200).json({
@@ -717,6 +731,13 @@ export const queueAutonomousCall = asyncHandler(async (req, res) => {
     }
     if (lead.do_not_contact) {
         return res.status(400).json({ error: "Lead is suppressed (DNC)" });
+    }
+    if (!lead.phone) {
+        return res.status(400).json({ error: "Lead has no phone number" });
+    }
+    const queueDigits = String(lead.phone || "").replace(/[^\d]/g, "");
+    if (queueDigits.length < 10 || queueDigits.length > 15) {
+        return res.status(400).json({ error: "Lead phone number is unverified or invalid" });
     }
 
     const scheduledTime = new Date(Date.now() + Math.max(0, Number(delayMinutes)) * 60 * 1000);

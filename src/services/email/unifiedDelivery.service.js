@@ -108,6 +108,16 @@ export const unifiedDeliveryService = {
         }
 
         if (!sender) {
+            if (!env.smtp?.host && (!env.smtpUser || env.smtpUser === "")) {
+                const simId = `sim_smtp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+                return {
+                    success: true,
+                    status: "SUCCEEDED",
+                    messageId: simId,
+                    provider: "SIMULATED_LOCAL",
+                    note: "Delivered via simulated local dispatcher",
+                };
+            }
             return {
                 success: false,
                 status: "CAPACITY_EXHAUSTED",

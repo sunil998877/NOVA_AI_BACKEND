@@ -7,6 +7,9 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { Mail } from "../../models/mail.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { Lead } from "../../models/lead.model.js";
+import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
+import { detectEmailScanner } from "../../utils/emailScannerDetector.js";
+import { eventBus } from "../../services/ase/eventBus.service.js";
 
 const TRANSPARENT_GIF = Buffer.from(
   "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
@@ -33,6 +36,48 @@ function sendPixel(res) {
   return res.end(TRANSPARENT_GIF);
 }
 
+export const trackAseOpen = asyncHandler(async (req, res) => {
+  try {
+    const leadId = Number(req.params.leadId);
+    const token = typeof req.query.t === "string" ? req.query.t : null;
+    const userAgent = req.get("user-agent") || null;
+    const ipAddress = getClientIp(req);
+    const lead = leadId ? await Lead.findById(leadId) : null;
+    const storedToken = lead?.metadata?.outreach_open_token;
+    const tokenOk = storedToken ? token === storedToken : true;
+    if (lead && tokenOk) {
+      const scannerResult = detectEmailScanner(userAgent, ipAddress);
+      console.log(`[TrackAseOpen] lead=${lead.id} scanner=${scannerResult.isScanner || false}`);
+      await eventBus.publish("EMAIL_OPENED", {
+        organization_id: lead.organization_id || 1,
+        lead_id: lead.id,
+        channel: "EMAIL",
+        status: "OPENED",
+        source: scannerResult.isScanner ? "PRIVACY_PROXY" : "EMAIL_PIXEL",
+        payload: {
+          is_scanner: scannerResult.isScanner,
+          scanner_type: scannerResult.scannerType,
+          user_agent: userAgent,
+          ip_address: ipAddress,
+          opened_at: new Date().toISOString(),
+        },
+        idempotency_key: `ase_open_${lead.id}`,
+      });
+      await OrchestratorService.handleEmailOpen(lead, {
+        mailId: `ase_${lead.id}`,
+        isScanner: scannerResult.isScanner,
+        scannerType: scannerResult.scannerType,
+        userAgent,
+        ipAddress,
+        isFirstOpen: true,
+      });
+    }
+  } catch (err) {
+    console.error("[TrackAseOpen] Error:", err.message);
+  }
+  return sendPixel(res);
+});
+
 export const trackOpen = asyncHandler(async (req, res) => {
   try {
     const userAgent = req.get("user-agent") || null;
@@ -46,6 +91,7 @@ export const trackOpen = asyncHandler(async (req, res) => {
         token: qToken,
         userAgent,
         ipAddress,
+
       });
     } else {
       const single = req.params.token;
@@ -119,7 +165,7 @@ export const trackUnsubscribe = asyncHandler(async (req, res) => {
       if (mail && mail.email) {
         email = mail.email.toLowerCase().trim();
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   if (email) {
@@ -133,7 +179,7 @@ export const trackUnsubscribe = asyncHandler(async (req, res) => {
           1
         );
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   res.set({ "Content-Type": "text/html; charset=utf-8" });
