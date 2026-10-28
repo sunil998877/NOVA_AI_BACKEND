@@ -42,4 +42,15 @@ export const AseExecution = {
             [status, payload ? JSON.stringify(payload) : null, Number(id)]
         );
     },
+
+    async cancelOpenForLead(orgId, leadId, reason = "Cancelled") {
+        const result = await execute(
+            `UPDATE ${table}
+             SET status = 'CANCELLED', payload = ?
+             WHERE organization_id = ? AND lead_id = ?
+               AND status IN ('PENDING', 'PROCESSING', 'RETRYING')`,
+            [JSON.stringify({ reason }), Number(orgId), Number(leadId)]
+        );
+        return Number(result?.affectedRows || 0);
+    },
 };

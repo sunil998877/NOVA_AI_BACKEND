@@ -11,6 +11,7 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { extractCallTranscript, ASE_OUTCOMES } from "../../services/ase/outcomeNormalizer.service.js";
 import { validateDispatchEligibility } from "../../services/ase/complianceGate.service.js";
 import { applyPlivoCallPayload } from "../../services/ase/voiceOutcomeApply.service.js";
+import { handleLiveVoiceInterest, isFinishedCallEvent } from "../../services/ase/warmTransfer.service.js";
 import { schedulePlivoCallSync } from "../../services/ase/plivoCallPoll.service.js";
 import { enqueuePendingApproval } from "../../services/ase/approvalQueue.service.js";
 import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
@@ -632,13 +633,10 @@ export const handleAgentflowOutcome = asyncHandler(async (req, res) => {
     const payload = flattenVoicePayload(req);
     const transcript = extractCallTranscript(payload);
     const rawStatus = payload.CallStatus || payload.call_status || payload.Status || payload.status;
-    const eventName = String(payload.event || payload.event_type || "").toLowerCase();
-    const looksFinished = Boolean(transcript || payload.disposition || payload.call_disposition)
-        || ["completed", "hangup", "end", "ended", "call_ended", "finished"].includes(eventName);
-    req.body = {
+    const merged = {
         ...payload,
         CallUUID: payload.CallUUID || payload.call_uuid || payload.request_uuid || payload.callUuid,
-        CallStatus: rawStatus || (looksFinished ? "completed" : "in-progress"),
+        CallStatus: rawStatus,
         SpeechResult: transcript,
         transcript,
         Duration: payload.Duration || payload.duration || payload.call_duration || 0,
@@ -646,8 +644,25 @@ export const handleAgentflowOutcome = asyncHandler(async (req, res) => {
         orgId: payload.orgId || payload.organization_id,
         HangupCause: payload.HangupCause || payload.hangup_cause || payload.disposition || payload.call_disposition,
         callId: payload.callId || payload.call_id,
+        channel: "VOICE",
     };
-    req.query = { ...(req.query || {}), ...req.body };
+    const looksFinished = isFinishedCallEvent(merged);
+
+    if (!looksFinished && (transcript || payload.disposition || payload.call_disposition)) {
+        const live = await handleLiveVoiceInterest({
+            ...merged,
+            CallStatus: rawStatus || "in-progress",
+        });
+        if (live?.handled) {
+            return res.status(200).json(live);
+        }
+    }
+
+    req.body = {
+        ...(req.query || {}),
+        ...merged,
+        CallStatus: rawStatus || (looksFinished ? "completed" : "in-progress"),
+    };
     return handlePlivoStatus(req, res);
 });
 

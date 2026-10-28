@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { authenticate } from "../middleware/auth.middleware.js";
+import { authenticate, requireAseAdmin, requireAseRole } from "../middleware/auth.middleware.js";
+import { createInvite, listInvites } from "../controllers/Ase/invite.controller.js";
+import { getAsePresence, setAsePresence } from "../controllers/Ase/presence.controller.js";
 import { getOperatingModeStatus, updateOperatingMode } from "../controllers/Ase/operating-mode.controller.js";
 import {
     approveById,
@@ -12,15 +14,21 @@ import {
 
 const router = Router();
 
-router.get("/operating-mode", authenticate, getOperatingModeStatus);
-router.put("/operating-mode", authenticate, updateOperatingMode);
-router.post("/operating-mode", authenticate, updateOperatingMode);
+router.get("/operating-mode", authenticate, requireAseRole, getOperatingModeStatus);
+router.put("/operating-mode", authenticate, requireAseAdmin, updateOperatingMode);
+router.post("/operating-mode", authenticate, requireAseAdmin, updateOperatingMode);
 
-router.get("/approvals", authenticate, listOrgApprovals);
-router.get("/approvals/lead/:leadId", authenticate, getLeadPendingApproval);
-router.post("/approvals/lead/:leadId/approve", authenticate, approveLeadAction);
-router.post("/approvals/lead/:leadId/hold", authenticate, holdLeadAction);
-router.post("/approvals/:id/approve", authenticate, approveById);
-router.post("/approvals/:id/hold", authenticate, holdById);
+router.get("/invites", authenticate, requireAseAdmin, listInvites);
+router.post("/invites", authenticate, requireAseAdmin, createInvite);
+
+router.get("/presence", authenticate, requireAseRole, getAsePresence);
+router.post("/presence", authenticate, requireAseRole, setAsePresence);
+
+router.get("/approvals", authenticate, requireAseRole, listOrgApprovals);
+router.get("/approvals/lead/:leadId", authenticate, requireAseRole, getLeadPendingApproval);
+router.post("/approvals/lead/:leadId/approve", authenticate, requireAseRole, approveLeadAction);
+router.post("/approvals/lead/:leadId/hold", authenticate, requireAseRole, holdLeadAction);
+router.post("/approvals/:id/approve", authenticate, requireAseRole, approveById);
+router.post("/approvals/:id/hold", authenticate, requireAseRole, holdById);
 
 export default router;

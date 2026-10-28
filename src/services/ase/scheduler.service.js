@@ -15,6 +15,10 @@ import { followUpScheduler } from "../followup/followUpScheduler.service.js";
 import { isCompanyResearchPending } from "./companyResearch.service.js";
 import { calculateNextCallingTime } from "./callingHours.service.js";
 import { applyOperatingModeGate } from "./operatingModeGate.service.js";
+import { applyCapacityGate, applyCapacityShift } from "./capacityPacingGate.service.js";
+import { applyLifecycleGate, applyLifecycleSweep } from "./lifecycleGate.service.js";
+import { applyLeadHealth } from "./lifecycleClose.service.js";
+import { jobQueue } from "./jobQueue.service.js";
 import { pollOpenPlivoCalls, schedulePlivoCallSync } from "./plivoCallPoll.service.js";
 import { env } from "../../config/env.js";
 
@@ -68,6 +72,7 @@ class AseScheduler {
         }
         try {
             await this.autoQueueNewLeads();
+            await applyLifecycleSweep(20).catch(() => {});
             await this.executeDueActions();
             await this.checkOverdueCallbacks();
             await followUpScheduler.processDueTasks().catch(() => {});
@@ -96,17 +101,30 @@ class AseScheduler {
                 const orgId = Number(lead.organization_id || 1);
                 const decision = await OrchestratorService.evaluateNextAction(lead);
                 if (decision && decision.action) {
-                    const nextStatus = transitionLeadState(
-                        lead.status,
-                        decision.action === "EMAIL" ? "DISPATCH_EMAIL" : "DISPATCH_CALL"
-                    ).nextState || "QUEUED";
+                    let action = decision.action;
+                    const capacity = await applyCapacityGate(lead, action, { reserve: false });
+                    if (!capacity.allowed && action === "CALL") {
+                        action = capacity.shiftedAction || "WAIT";
+                    } else if (!capacity.allowed && action === "EMAIL") {
+                        action = "WAIT";
+                    }
+                    const dispatchEvent = action === "EMAIL"
+                        ? "DISPATCH_EMAIL"
+                        : action === "CALL"
+                            ? "DISPATCH_CALL"
+                            : null;
+                    const nextStatus = dispatchEvent
+                        ? (transitionLeadState(lead.status, dispatchEvent).nextState || "QUEUED")
+                        : (lead.status || "QUEUED");
 
                     await Lead.updateById(
                         lead.id,
                         {
                             status: nextStatus,
-                            next_action: decision.action,
-                            next_action_time: decision.scheduledTime || new Date(),
+                            next_action: action,
+                            next_action_time: action === "WAIT"
+                                ? new Date(Date.now() + 15 * 60 * 1000)
+                                : (decision.scheduledTime || new Date()),
                         },
                         orgId
                     );
@@ -114,8 +132,8 @@ class AseScheduler {
                     await eventBus.publish("ActionScheduled", {
                         organization_id: orgId,
                         lead_id: lead.id,
-                        channel: decision.channel || "SYSTEM",
-                        action: decision.action,
+                        channel: action === "CALL" ? "VOICE" : (decision.channel || "SYSTEM"),
+                        action,
                         scheduled_time: decision.scheduledTime || new Date(),
                     });
                 }
@@ -137,15 +155,67 @@ class AseScheduler {
     async processLeadAction(lead, options = {}) {
         const orgId = Number(lead.organization_id || 1);
         const action = lead.next_action;
-        const freshLead = await Lead.findById(lead.id, orgId);
+        let workingLead = await Lead.findById(lead.id, orgId);
         const force = Boolean(options.force);
         const skipTiming = force || env.bypassTimingGates;
 
-        if (!freshLead || freshLead.do_not_contact || freshLead.next_action !== action) {
-            return { executed: false, reason: "Lead missing, DNC, or action changed" };
+        if (!workingLead || workingLead.next_action !== action) {
+            return { executed: false, reason: "Lead missing or action changed" };
         }
 
-        const dispatchGate = await applyOperatingModeGate(freshLead, action, {
+        const lifecycle = await applyLifecycleGate(workingLead, action, {
+            force,
+            approved: Boolean(options.approved),
+            manual: Boolean(options.manual),
+        });
+        if (!lifecycle.allowed) {
+            return {
+                executed: false,
+                reason: lifecycle.reason,
+                closed: Boolean(lifecycle.closed),
+                sanitized: Boolean(lifecycle.sanitized),
+            };
+        }
+        workingLead = lifecycle.lead || workingLead;
+
+        if (action !== "EMAIL" && action !== "CALL") {
+            if (action === "WAIT") {
+                const decision = await OrchestratorService.evaluateNextAction(workingLead);
+                const proposed = decision?.action || "WAIT";
+                const retry = await applyCapacityGate(workingLead, proposed, { reserve: false });
+                const next = (!retry.allowed && proposed === "CALL")
+                    ? (retry.shiftedAction || "WAIT")
+                    : (!retry.allowed && proposed === "EMAIL" ? "WAIT" : proposed);
+                await Lead.updateById(
+                    workingLead.id,
+                    {
+                        next_action: next,
+                        next_action_time: next === "WAIT"
+                            ? new Date(Date.now() + 15 * 60 * 1000)
+                            : (decision?.scheduledTime || new Date()),
+                    },
+                    orgId
+                );
+                return { executed: false, reason: "Wait re-evaluated", next };
+            }
+            return { executed: false, reason: "No dispatchable action" };
+        }
+
+        const capacity = await applyCapacityGate(workingLead, action, {
+            force,
+            approved: Boolean(options.approved),
+            manual: Boolean(options.manual),
+        });
+        if (!capacity.allowed) {
+            await applyCapacityShift(workingLead, capacity);
+            return {
+                executed: false,
+                reason: capacity.reason,
+                shiftedTo: capacity.shiftedAction,
+            };
+        }
+
+        const dispatchGate = await applyOperatingModeGate(workingLead, action, {
             approved: Boolean(options.approved),
             manual: Boolean(options.manual),
         });
@@ -158,16 +228,16 @@ class AseScheduler {
             };
         }
 
-        if (action === "EMAIL" && !skipTiming && isCompanyResearchPending(freshLead)) {
+        if (action === "EMAIL" && !skipTiming && isCompanyResearchPending(workingLead)) {
             return { executed: false, reason: "Company research still pending" };
         }
 
-        const timeStr = freshLead.next_action_time ? new Date(freshLead.next_action_time).toISOString() : new Date().toISOString();
-        const idempotencyKey = `exec_${orgId}_${freshLead.id}_${action}_${timeStr}`;
+        const timeStr = workingLead.next_action_time ? new Date(workingLead.next_action_time).toISOString() : new Date().toISOString();
+        const idempotencyKey = `exec_${orgId}_${workingLead.id}_${action}_${timeStr}`;
 
         let claim = await AseExecution.claim({
             organization_id: orgId,
-            lead_id: freshLead.id,
+            lead_id: workingLead.id,
             idempotency_key: idempotencyKey,
             action_type: action,
         });
@@ -180,7 +250,7 @@ class AseScheduler {
                     await AseExecution.complete(existing.id, "FAILED", { error: "Execution lock expired" });
                     const retry = await AseExecution.claim({
                         organization_id: orgId,
-                        lead_id: freshLead.id,
+                        lead_id: workingLead.id,
                         idempotency_key: `${idempotencyKey}_retry_${Date.now()}`,
                         action_type: action,
                     });
@@ -197,10 +267,10 @@ class AseScheduler {
         }
 
         if (skipTiming) {
-            console.log(`[ASE Scheduler] Timing gates bypassed for lead ${freshLead.id} action=${action}`);
+            console.log(`[ASE Scheduler] Timing gates bypassed for lead ${workingLead.id} action=${action}`);
         }
 
-        const eligibility = await validateDispatchEligibility(freshLead, action, {
+        const eligibility = await validateDispatchEligibility(workingLead, action, {
             isEngagementTrigger: skipTiming || action === "CALL",
             bypassCallingHours: skipTiming,
             bypassCooldown: skipTiming,
@@ -209,9 +279,9 @@ class AseScheduler {
             await AseExecution.complete(claim.executionId, "CANCELLED", { reason: eligibility.reason });
             const hoursBlock = /calling hours/i.test(eligibility.reason || "");
             if (action === "CALL" && hoursBlock) {
-                const later = calculateNextCallingTime(freshLead, { delaySeconds: 0 });
+                const later = calculateNextCallingTime(workingLead, { delaySeconds: 0 });
                 await Lead.updateById(
-                    freshLead.id,
+                    workingLead.id,
                     { next_action: "CALL", next_action_time: later },
                     orgId
                 );
@@ -219,7 +289,7 @@ class AseScheduler {
             }
             const keepEmail = action === "EMAIL" && !/consent|suppressed|do_not_contact|terminal/i.test(eligibility.reason || "");
             await Lead.updateById(
-                freshLead.id,
+                workingLead.id,
                 {
                     next_action: keepEmail ? "EMAIL" : null,
                     next_action_time: keepEmail ? new Date(Date.now() + 15 * 60 * 1000) : null,
@@ -228,7 +298,7 @@ class AseScheduler {
             );
             await eventBus.publish("ActionFailed", {
                 organization_id: orgId,
-                lead_id: freshLead.id,
+                lead_id: workingLead.id,
                 channel: "SYSTEM",
                 action,
                 reason: eligibility.reason,
@@ -242,11 +312,13 @@ class AseScheduler {
             let callRecord = null;
 
             if (action === "CALL") {
+                jobQueue.beginVoiceJob();
+                try {
                 const callResult = await Call.create({
                     organization_id: orgId,
-                    lead_id: freshLead.id,
+                    lead_id: workingLead.id,
                     idempotency_key: idempotencyKey,
-                    phone_number: freshLead.phone,
+                    phone_number: workingLead.phone,
                     call_channel: "VOICE",
                     call_type: "OUTBOUND",
                     initiation_source: "AUTONOMOUS_AI",
@@ -259,14 +331,14 @@ class AseScheduler {
 
                 await eventBus.publish("ActionDispatched", {
                     organization_id: orgId,
-                    lead_id: freshLead.id,
+                    lead_id: workingLead.id,
                     channel: "VOICE",
                     action: "CALL",
                     execution_id: claim.executionId,
                     call_id: callRecord.id,
                 });
 
-                result = await voiceAdapter.execute(freshLead, "CALL", {
+                result = await voiceAdapter.execute(workingLead, "CALL", {
                     callId: callRecord.id,
                 });
 
@@ -278,9 +350,9 @@ class AseScheduler {
                     });
                     await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
                     await Lead.updateById(
-                        freshLead.id,
+                        workingLead.id,
                         {
-                            status: freshLead.status === "NEW" || freshLead.status === "QUEUED" ? "CONTACTED" : freshLead.status,
+                            status: workingLead.status === "NEW" || workingLead.status === "QUEUED" ? "CONTACTED" : workingLead.status,
                             next_action: "CALL",
                             next_action_time: new Date(Date.now() + 15 * 60 * 1000),
                         },
@@ -288,7 +360,7 @@ class AseScheduler {
                     );
                     await eventBus.publish("ActionFailed", {
                         organization_id: orgId,
-                        lead_id: freshLead.id,
+                        lead_id: workingLead.id,
                         channel: "VOICE",
                         action: "CALL",
                         call_id: callRecord.id,
@@ -306,15 +378,15 @@ class AseScheduler {
                 });
                 schedulePlivoCallSync(initiatedCall || { ...callRecord, provider_call_uuid: providerUuid });
 
-                const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
+                const currentCounters = workingLead.attempt_counters || { email: 0, voice: 0, total: 0 };
                 currentCounters.voice = (currentCounters.voice || 0) + 1;
                 currentCounters.total = (currentCounters.total || 0) + 1;
 
-                const stateTransition = transitionLeadState(freshLead.status, "CALL_INITIATED");
+                const stateTransition = transitionLeadState(workingLead.status, "CALL_INITIATED");
                 const nextStatus = stateTransition.nextState;
 
                 await Lead.updateById(
-                    freshLead.id,
+                    workingLead.id,
                     {
                         status: nextStatus,
                         attempt_counters: currentCounters,
@@ -327,7 +399,7 @@ class AseScheduler {
 
                 if (result.rawResponse?.simulated || result.metadata?.simulated) {
                     await OrchestratorService.handleOutcomeEvent(
-                        { ...freshLead, status: nextStatus, attempt_counters: currentCounters },
+                        { ...workingLead, status: nextStatus, attempt_counters: currentCounters },
                         ASE_OUTCOMES.AMBIGUOUS,
                         {
                             channel: "VOICE",
@@ -341,7 +413,7 @@ class AseScheduler {
 
                 await eventBus.publish("ActionCompleted", {
                     organization_id: orgId,
-                    lead_id: freshLead.id,
+                    lead_id: workingLead.id,
                     channel: "VOICE",
                     action: "CALL",
                     status: result.status,
@@ -353,30 +425,33 @@ class AseScheduler {
                 if (stateTransition.changed) {
                     await eventBus.publish("LeadStateChanged", {
                         organization_id: orgId,
-                        lead_id: freshLead.id,
+                        lead_id: workingLead.id,
                         channel: "VOICE",
-                        from_state: freshLead.status,
+                        from_state: workingLead.status,
                         to_state: nextStatus,
                     });
                 }
 
                 await AseExecution.complete(claim.executionId, "SUCCEEDED", result.metadata);
                 return { executed: true, action: "CALL", callId: callRecord.id };
+                } finally {
+                    jobQueue.endVoiceJob();
+                }
             } else if (action === "EMAIL") {
                 await eventBus.publish("ActionDispatched", {
                     organization_id: orgId,
-                    lead_id: freshLead.id,
+                    lead_id: workingLead.id,
                     channel: "EMAIL",
                     action: "EMAIL",
                     execution_id: claim.executionId,
                 });
 
-                result = await emailAdapter.execute(freshLead, "SEND");
+                result = await emailAdapter.execute(workingLead, "SEND");
 
                 if (result.status !== "SUCCEEDED") {
                     await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
                     await Lead.updateById(
-                        freshLead.id,
+                        workingLead.id,
                         {
                             status: "QUEUED",
                             next_action: "EMAIL",
@@ -386,7 +461,7 @@ class AseScheduler {
                     );
                     await eventBus.publish("ActionFailed", {
                         organization_id: orgId,
-                        lead_id: freshLead.id,
+                        lead_id: workingLead.id,
                         channel: "EMAIL",
                         action: "EMAIL",
                         status: result.status,
@@ -395,14 +470,14 @@ class AseScheduler {
                     return { executed: false, reason: result.error || "Email delivery failed" };
                 }
 
-                const currentCounters = freshLead.attempt_counters || { email: 0, voice: 0, total: 0 };
+                const currentCounters = workingLead.attempt_counters || { email: 0, voice: 0, total: 0 };
                 currentCounters.email = (currentCounters.email || 0) + 1;
                 currentCounters.total = (currentCounters.total || 0) + 1;
 
-                const stateTransition = transitionLeadState(freshLead.status, "EMAIL_SENT");
+                const stateTransition = transitionLeadState(workingLead.status, "EMAIL_SENT");
                 const nextStatus = stateTransition.nextState;
 
-                const enrolled = await followUpEngine.enrollLead(freshLead, {
+                const enrolled = await followUpEngine.enrollLead(workingLead, {
                     sentAt: new Date(),
                     subject: result.metadata?.subject,
                     messageId: result.metadata?.messageId,
@@ -414,7 +489,7 @@ class AseScheduler {
                     : new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
 
                 await Lead.updateById(
-                    freshLead.id,
+                    workingLead.id,
                     {
                         status: nextStatus,
                         attempt_counters: currentCounters,
@@ -427,7 +502,7 @@ class AseScheduler {
 
                 await eventBus.publish("ActionCompleted", {
                     organization_id: orgId,
-                    lead_id: freshLead.id,
+                    lead_id: workingLead.id,
                     channel: "EMAIL",
                     action: "EMAIL",
                     status: result.status,
@@ -437,16 +512,16 @@ class AseScheduler {
                 if (stateTransition.changed) {
                     await eventBus.publish("LeadStateChanged", {
                         organization_id: orgId,
-                        lead_id: freshLead.id,
+                        lead_id: workingLead.id,
                         channel: "EMAIL",
-                        from_state: freshLead.status,
+                        from_state: workingLead.status,
                         to_state: nextStatus,
                     });
                 }
 
                 const outcome = normalizeChannelOutcome("EMAIL", result.rawResponse);
                 const emailedLead = {
-                    ...freshLead,
+                    ...workingLead,
                     status: nextStatus,
                     attempt_counters: currentCounters,
                     last_contacted_at: new Date(),
@@ -462,7 +537,7 @@ class AseScheduler {
                 );
 
                 if (currentCounters.email === 1) {
-                    const latest = await Lead.findById(freshLead.id, orgId);
+                    const latest = await Lead.findById(workingLead.id, orgId);
                     await OrchestratorService.schedulePostFirstEmailAction(latest || emailedLead).catch((err) => {
                         console.error("[ASE] Post-first-email call schedule failed:", err.message);
                     });
@@ -475,11 +550,11 @@ class AseScheduler {
                 return { executed: false, reason: `Unknown action ${action}` };
             }
         } catch (err) {
-            console.error(`[ASE Scheduler] Failed executing ${action} on lead ${freshLead.id}:`, err.message);
+            console.error(`[ASE Scheduler] Failed executing ${action} on lead ${workingLead.id}:`, err.message);
             await AseExecution.complete(claim.executionId, "FAILED", { error: err.message });
             await eventBus.publish("ActionFailed", {
                 organization_id: orgId,
-                lead_id: freshLead.id,
+                lead_id: workingLead.id,
                 channel: "SYSTEM",
                 action,
                 error: err.message,
@@ -499,7 +574,10 @@ class AseScheduler {
                         sla_status: "BREACHED",
                         sla_breached_at: new Date(),
                     });
-                    await Lead.updateById(cb.lead_id, { health: "RED" }, cbOrg);
+                    await applyLeadHealth(
+                        { id: cb.lead_id, organization_id: cbOrg, callback: { status: "OVERDUE", sla_status: "BREACHED" } },
+                        { overdueHotCallback: true }
+                    );
                     await eventBus.publish("CallbackSlaBreached", {
                         organization_id: cbOrg,
                         lead_id: cb.lead_id,

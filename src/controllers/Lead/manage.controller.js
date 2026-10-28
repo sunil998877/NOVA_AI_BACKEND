@@ -15,6 +15,11 @@ import { enqueueLeadCompanyResearch } from "../../services/leads/companyResearch
 import { getLeadApproval } from "../../services/ase/approvalQueue.service.js";
 import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
 import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
+import { haltOutreachForLead } from "../../services/ase/outreachHalt.service.js";
+import { isConsentGranted } from "../../services/ase/consent.service.js";
+import { isTerminalStatus, sanitizeNextAction, sanitizeStatus } from "../../services/ase/lifecycle.service.js";
+import { buildNbaCard } from "../../services/ase/nbaCard.service.js";
+import { loggedDecisionFromTimeline } from "../../services/ase/nbaPresent.service.js";
 
 const TERMINAL_STATES = new Set(["CLOSED_WON", "CLOSED_LOST", "CLOSED_UNQUALIFIED", "SUPPRESSED_DNC"]);
 
@@ -27,7 +32,11 @@ export const listLeads = asyncHandler(async (req, res) => {
         q: String(req.query.q || ""),
         source: String(req.query.source || ""),
         status: String(req.query.status || ""),
-        priority: req.query.priority !== undefined ? req.query.priority : null,
+        health: String(req.query.health || ""),
+        min_priority: req.query.min_priority !== undefined && req.query.min_priority !== "" ? Number(req.query.min_priority) : null,
+        email_consent: String(req.query.email_consent || ""),
+        do_not_contact: req.query.do_not_contact,
+        priority: req.query.priority !== undefined && req.query.priority !== "" ? req.query.priority : null,
         assigned_rep_id: req.query.assigned_rep_id ? Number(req.query.assigned_rep_id) : null,
         skip: (page - 1) * limit,
         limit,
@@ -50,12 +59,21 @@ export const getLead = asyncHandler(async (req, res) => {
         getOperatingMode(orgId).catch(() => OPERATING_MODES.FULLY_AUTOMATED),
         getLeadApproval(orgId, lead.id).catch(() => null),
     ]);
+    const nba = await buildNbaCard(
+        lead,
+        loggedDecisionFromTimeline(timeline) || {
+            action: lead.next_action,
+            scheduledTime: lead.next_action_time,
+        },
+        { operatingMode, pendingApproval }
+    ).catch(() => null);
     return res.status(200).json({
         data: {
             lead,
             timeline: timeline || [],
             operatingMode,
             pendingApproval,
+            nba,
         },
     });
 });
@@ -67,6 +85,10 @@ export const updateLead = asyncHandler(async (req, res) => {
 
     const updates = { ...req.body };
     const oldStatus = lead.status;
+    if (updates.status) updates.status = sanitizeStatus(updates.status);
+    if (Object.prototype.hasOwnProperty.call(updates, "next_action")) {
+        updates.next_action = sanitizeNextAction(updates.next_action);
+    }
     const newStatus = updates.status;
 
     if (updates.metadata && typeof updates.metadata === "object") {
@@ -87,18 +109,23 @@ export const updateLead = asyncHandler(async (req, res) => {
         updates.next_action_time = null;
         await Suppression.add(orgId, "EMAIL", lead.email, "Marked DNC via UI");
         if (lead.phone) await Suppression.add(orgId, "PHONE", lead.phone, "Marked DNC via UI");
+        await haltOutreachForLead(orgId, lead.id, "Marked DNC via UI");
     } else if (clearDnc) {
         updates.do_not_contact = 0;
         if (!newStatus || newStatus === "SUPPRESSED_DNC") {
             updates.status = "CONTACTED";
         }
         await Suppression.removeByContact(orgId, { email: lead.email, phone: lead.phone });
-    } else if (newStatus && TERMINAL_STATES.has(newStatus)) {
+    } else if (newStatus && (TERMINAL_STATES.has(newStatus) || isTerminalStatus(newStatus))) {
         updates.next_action = null;
         updates.next_action_time = null;
     }
 
     const updated = await Lead.updateById(lead.id, updates, orgId);
+
+    if (!markDnc && newStatus && isTerminalStatus(newStatus) && newStatus !== oldStatus) {
+        await haltOutreachForLead(orgId, lead.id, `Lead closed (${newStatus})`);
+    }
 
     if (newStatus && newStatus !== oldStatus) {
         await LeadEvent.create({
@@ -139,91 +166,6 @@ export const leadStats = asyncHandler(async (req, res) => {
             byStatus,
             bySource,
             callbacks: callbackStats,
-        },
-    });
-});
-
-function pct(num, den) {
-    const n = Number(num || 0);
-    const d = Number(den || 0);
-    if (!d) return 0;
-    return Math.round((n / d) * 1000) / 10;
-}
-
-export const getAseReports = asyncHandler(async (req, res) => {
-    const orgId = Number(req.user.organization_id || 1);
-
-    const [speedRows, eventRows, callRows, slaRows] = await Promise.all([
-        query(
-            `SELECT AVG(TIMESTAMPDIFF(MINUTE, created_at, last_contacted_at)) AS avg_minutes,
-                    COUNT(*) AS contacted_count
-             FROM leads
-             WHERE organization_id = ? AND last_contacted_at IS NOT NULL`,
-            [orgId]
-        ),
-        query(
-            `SELECT event_type, channel, COUNT(*) AS c
-             FROM lead_events
-             WHERE organization_id = ?
-             GROUP BY event_type, channel`,
-            [orgId]
-        ),
-        query(
-            `SELECT COUNT(*) AS dials,
-                    SUM(CASE WHEN is_answered = 1 THEN 1 ELSE 0 END) AS connected
-             FROM calls
-             WHERE organization_id = ?`,
-            [orgId]
-        ),
-        query(
-            `SELECT
-                SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed,
-                SUM(CASE WHEN status = 'COMPLETED' AND sla_status = 'MET' THEN 1 ELSE 0 END) AS met,
-                COUNT(*) AS total
-             FROM callbacks
-             WHERE organization_id = ?`,
-            [orgId]
-        ),
-    ]);
-
-    const eventCount = (type, channel = null) => (eventRows || [])
-        .filter((row) => row.event_type === type && (channel == null || row.channel === channel))
-        .reduce((sum, row) => sum + Number(row.c || 0), 0);
-
-    const sent = eventCount("EMAIL_SENT") + eventCount("ActionDispatched", "EMAIL");
-    const opened = eventCount("EMAIL_OPENED");
-    const replied = eventCount("EMAIL_REPLY_RECEIVED");
-    const callbacksQueued = eventCount("CallbackCreated") + eventCount("CALLBACK_CREATED");
-
-    const dials = Number(callRows?.[0]?.dials || 0);
-    const connected = Number(callRows?.[0]?.connected || 0);
-    const completedCallbacks = Number(slaRows?.[0]?.completed || 0);
-    const metCallbacks = Number(slaRows?.[0]?.met || 0);
-    const avgMinutesRaw = speedRows?.[0]?.avg_minutes;
-    const avgMinutes = avgMinutesRaw == null ? null : Math.round(Number(avgMinutesRaw) * 10) / 10;
-
-    return res.status(200).json({
-        data: {
-            speedToLeadMinutes: avgMinutes,
-            contactedCount: Number(speedRows?.[0]?.contacted_count || 0),
-            email: {
-                sent,
-                opened,
-                replied,
-                responseRate: pct(opened + replied, sent),
-            },
-            voice: {
-                dials,
-                connected,
-                callbacks: callbacksQueued,
-                connectRate: pct(connected, dials),
-            },
-            callbacks: {
-                total: Number(slaRows?.[0]?.total || 0),
-                completed: completedCallbacks,
-                met: metCallbacks,
-                slaRate: pct(metCallbacks, completedCallbacks),
-            },
         },
     });
 });
@@ -287,11 +229,9 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
     if (TERMINAL_STATES.has(lead.status)) return res.status(400).json({ error: "Lead is in a terminal state" });
 
     const startedAt = Date.now();
-    if (lead.next_action === "WAIT" || lead.next_action === "REP_CALLBACK") {
+    if (lead.next_action === "REP_CALLBACK") {
         return res.status(400).json({
-            error: lead.next_action === "REP_CALLBACK"
-                ? "This lead is waiting on a human callback"
-                : "The recommended action is to wait",
+            error: "This lead is waiting on a human callback",
             data: { lead, executed: false },
         });
     }
@@ -306,9 +246,9 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
             const counters = typeof lead.attempt_counters === "string"
                 ? JSON.parse(lead.attempt_counters || "{}")
                 : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
-            if (lead.email && counters.email < 3 && lead.email_consent?.status !== "DENIED") {
+            if (lead.email && counters.email < 3 && isConsentGranted(lead.email_consent)) {
                 action = "EMAIL";
-            } else if (lead.phone && counters.voice < 2 && lead.voice_consent?.status !== "DENIED") {
+            } else if (lead.phone && counters.voice < 2 && isConsentGranted(lead.voice_consent)) {
                 action = "CALL";
             }
         }

@@ -3,6 +3,7 @@ import { Callback } from "../../models/callback.model.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { eventBus } from "../../services/ase/eventBus.service.js";
+import { routeUnassignedHandoffs } from "../../services/ase/routingAssign.service.js";
 
 export const listCallbacks = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
@@ -10,6 +11,7 @@ export const listCallbacks = asyncHandler(async (req, res) => {
     const p = Math.max(Number(page) || 1, 1);
     const l = Math.min(Math.max(Number(limit) || 50, 1), 200);
 
+    await routeUnassignedHandoffs(orgId).catch(() => ({ assigned: 0 }));
     await Callback.ensureHandoffQueue(orgId);
 
     const items = await Callback.list(orgId, {

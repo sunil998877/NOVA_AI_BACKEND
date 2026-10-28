@@ -8,6 +8,7 @@ import { completeReset } from "../controllers/Auth/complete-reset.controller.js"
 import { updateUser } from "../controllers/Auth/update-user.controller.js";
 import { signout } from "../controllers/Auth/signout.controller.js";
 import { authenticate } from "../middleware/auth.middleware.js";
+import { previewInvite } from "../controllers/Ase/invite.controller.js";
 import { env } from "../config/env.js";
 
 const router = Router();
@@ -20,6 +21,7 @@ const authLimiter = rateLimit({
     message: { error: "Too many authentication attempts. Try again later." },
 });
 
+router.get("/invite/:token", previewInvite);
 router.get("/config", (_req, res) => {
     res.status(200).json({
         googleClientId: env.googleClientId || "",

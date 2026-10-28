@@ -385,6 +385,12 @@ async function migrateAseFoundation(pool) {
         if (!existingUserCols.has("role")) {
             await pool.query("ALTER TABLE users ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'ORG_ADMIN'");
         }
+        if (!existingUserCols.has("team")) {
+            try { await pool.query("ALTER TABLE users ADD COLUMN team VARCHAR(64) NULL"); } catch (_) {}
+        }
+        if (!existingUserCols.has("territory")) {
+            try { await pool.query("ALTER TABLE users ADD COLUMN territory VARCHAR(255) NULL"); } catch (_) {}
+        }
     } catch (e) {
         console.warn("User migration error:", e.message);
     }

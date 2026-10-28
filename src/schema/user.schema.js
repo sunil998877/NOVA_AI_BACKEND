@@ -1,7 +1,7 @@
 export const userSchema = {
     table: "users",
     columns:
-        "id, organization_id, role, fullName, organization, email, passwordHash, googleId, authProvider, passwordResetTokenHash, passwordResetExpires, createdAt, updatedAt",
+        "id, organization_id, role, fullName, organization, email, team, territory, passwordHash, googleId, authProvider, passwordResetTokenHash, passwordResetExpires, createdAt, updatedAt",
     updatable: [
         "organization_id",
         "role",
@@ -12,6 +12,8 @@ export const userSchema = {
         "authProvider",
         "passwordResetTokenHash",
         "passwordResetExpires",
+        "team",
+        "territory",
     ],
     createTable: `CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -20,6 +22,8 @@ export const userSchema = {
         fullName VARCHAR(255) NOT NULL,
         organization VARCHAR(255) NOT NULL,
         email VARCHAR(255) NOT NULL UNIQUE,
+        team VARCHAR(64) NULL,
+        territory VARCHAR(255) NULL,
         passwordHash VARCHAR(255) NULL,
         googleId VARCHAR(255) NULL UNIQUE,
         authProvider ENUM('local', 'google') NOT NULL DEFAULT 'local',

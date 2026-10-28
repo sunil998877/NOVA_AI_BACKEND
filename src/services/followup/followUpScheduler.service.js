@@ -10,6 +10,7 @@ import { unifiedDeliveryService } from "../email/unifiedDelivery.service.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { canAutoDispatch } from "../ase/operatingMode.service.js";
 import { enqueuePendingApproval } from "../ase/approvalQueue.service.js";
+import { isConsentGranted } from "../ase/consent.service.js";
 
 class FollowUpSchedulerService {
     constructor() {
@@ -119,6 +120,13 @@ class FollowUpSchedulerService {
                 if (!lead || !lead.email || lead.do_not_contact) {
                     await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Lead missing or marked DNC" }, orgId);
                     await FollowUpEnrollment.cancel(enrollment.id, "Lead marked DNC", orgId);
+                    continue;
+                }
+                if (!isConsentGranted(lead.email_consent)) {
+                    if (lead.email_consent?.status === "DENIED") {
+                        await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Email consent denied" }, orgId);
+                        await FollowUpEnrollment.cancel(enrollment.id, "Email consent denied", orgId);
+                    }
                     continue;
                 }
 

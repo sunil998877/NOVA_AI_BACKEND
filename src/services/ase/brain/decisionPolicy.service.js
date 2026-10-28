@@ -1,16 +1,11 @@
 import { Suppression } from "../../../models/suppression.model.js";
 import { FollowUpEnrollment } from "../../../models/follow-up-enrollment.model.js";
 import { minTouchGapHours } from "./featureSchema.js";
+import { isConsentGranted } from "../consent.service.js";
+import { MAX_CALLS, MAX_EMAILS, TERMINAL_STATES as TERMINAL_LIST } from "../lifecycle.constants.js";
+import { isOutreachStopped } from "../lifecycle.service.js";
 
-const TERMINAL_STATES = new Set([
-    "CLOSED_WON",
-    "CLOSED_LOST",
-    "CLOSED_UNQUALIFIED",
-    "SUPPRESSED_DNC",
-]);
-
-const MAX_EMAILS = 3;
-const MAX_CALLS = 2;
+const TERMINAL_STATES = new Set(TERMINAL_LIST);
 
 export const decisionPolicyService = {
     async evaluateEligibility(lead, features) {
@@ -26,21 +21,12 @@ export const decisionPolicyService = {
             };
         }
 
-        if (TERMINAL_STATES.has(lead.status)) {
+        if (isOutreachStopped(lead) || TERMINAL_STATES.has(lead.status) || lead.do_not_contact) {
             return {
                 isEligible: false,
                 terminal: true,
                 candidateActions: [],
-                blockedReasons: [`TERMINAL_STATE_${lead.status}`],
-            };
-        }
-
-        if (lead.do_not_contact) {
-            return {
-                isEligible: false,
-                terminal: true,
-                candidateActions: [],
-                blockedReasons: ["DNC_FLAGGED"],
+                blockedReasons: lead.do_not_contact ? ["DNC_FLAGGED"] : [`TERMINAL_STATE_${lead.status}`],
             };
         }
 
@@ -78,6 +64,8 @@ export const decisionPolicyService = {
             blockedReasons.push("MISSING_EMAIL_ADDRESS");
         } else if (lead.email_consent?.status === "DENIED") {
             blockedReasons.push("EMAIL_CONSENT_DENIED");
+        } else if (!isConsentGranted(lead.email_consent)) {
+            blockedReasons.push("EMAIL_CONSENT_NOT_GRANTED");
         } else {
             candidateActions.push("EMAIL");
         }

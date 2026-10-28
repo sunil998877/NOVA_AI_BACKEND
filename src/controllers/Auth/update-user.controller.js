@@ -19,6 +19,8 @@ export const updateUser = asyncHandler(async (req, res) => {
     if (organization) {
         fields.organization = organization;
     }
+    delete fields.role;
+    delete fields.organization_id;
     if (password) {
         if (password.length < 8) {
             return res.status(400).json({ error: "Password must be at least 8 characters" });

@@ -291,6 +291,17 @@ export const Call = {
         return this.countStats(orgId);
     },
 
+    async countActiveOutbound(orgId) {
+        const rows = await query(
+            `SELECT COUNT(*) AS total FROM ${table}
+             WHERE organization_id = ?
+               AND completed_at IS NULL
+               AND provider_status IN ('initiated', 'ringing', 'in-progress', 'queued', 'unknown')`,
+            [Number(orgId || 1)]
+        );
+        return Number(rows?.[0]?.total || 0);
+    },
+
     async findOpenForPoll({ olderThanSec = 8, newerThanHours = 8, limit = 20 } = {}) {
         const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 50);
         const rows = await query(

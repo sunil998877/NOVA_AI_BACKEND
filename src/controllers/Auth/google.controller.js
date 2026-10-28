@@ -4,11 +4,12 @@ import { User } from "../../models/user.model.js";
 import { signAuthToken } from "../../utils/jwt.js";
 import { toPublicUser } from "../../utils/user.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { bindSignupAccount } from "../../services/ase/orgBinding.service.js";
 
 const googleClient = new OAuth2Client();
 
 export const googleAuth = asyncHandler(async (req, res) => {
-    const { idToken } = req.body;
+    const { idToken, inviteToken } = req.body;
 
     if (!idToken) {
         return res.status(400).json({ error: "idToken is required" });
@@ -41,13 +42,19 @@ export const googleAuth = asyncHandler(async (req, res) => {
     let user = await User.findByGoogleIdOrEmail(googleId, email);
 
     if (!user) {
-        user = await User.create({
-            fullName,
-            organization,
-            email,
-            googleId,
-            authProvider: "google",
-        });
+        try {
+            const bound = await bindSignupAccount({
+                fullName,
+                organization: organization || fullName,
+                email,
+                googleId,
+                authProvider: "google",
+                inviteToken,
+            });
+            user = bound.user;
+        } catch (err) {
+            return res.status(err.status || 500).json({ error: err.message || "Could not create account" });
+        }
     } else {
         const updates = {};
         if (!user.googleId) {

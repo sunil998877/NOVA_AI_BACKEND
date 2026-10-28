@@ -82,6 +82,25 @@ export const LeadEvent = {
         return rows.map(toEvent);
     },
 
+    async countHourlyDispatches(orgId) {
+        const rows = await query(
+            `SELECT channel, COUNT(*) AS total FROM ${table}
+             WHERE organization_id = ?
+               AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+               AND event_type IN ('ActionCompleted', 'ActionDispatched', 'EMAIL_SENT', 'CALL_INITIATED')
+               AND channel IN ('EMAIL', 'VOICE')
+             GROUP BY channel`,
+            [Number(orgId || 1)]
+        );
+        const counts = { email: 0, voice: 0 };
+        for (const row of rows || []) {
+            const channel = String(row.channel || "").toUpperCase();
+            if (channel === "EMAIL") counts.email = Number(row.total || 0);
+            if (channel === "VOICE") counts.voice = Number(row.total || 0);
+        }
+        return counts;
+    },
+
     async listRecent(orgId, limit = 50) {
         const rows = await query(
             `SELECT ${columns} FROM ${table}

@@ -33,6 +33,7 @@ export async function socketAuth(socket, next) {
                             id: String(user.id),
                             userId: Number(user.id),
                             role: "user",
+                            aseRole: user.role || "SALESPERSON",
                             senderType: "user",
                             name: user.fullName || user.email || "Marketer",
                             email: user.email,

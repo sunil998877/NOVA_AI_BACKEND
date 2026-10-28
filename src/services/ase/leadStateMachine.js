@@ -64,6 +64,10 @@ export function createLeadStateMachine(initialState = "NEW") {
                     INTEREST_DETECTED: "INTERESTED",
                     CALLBACK_REQUESTED: "CALLBACK_SCHEDULED",
                     NOT_INTERESTED: "NOT_INTERESTED",
+                    NO_RESPONSE: "NO_RESPONSE",
+                    CLOSE_LOST: "CLOSED_LOST",
+                    CLOSE_UNQUALIFIED: "CLOSED_UNQUALIFIED",
+                    CLOSE_WON: "CLOSED_WON",
                     DNC: "SUPPRESSED_DNC",
                     SUPPRESS_DNC: "SUPPRESSED_DNC",
                 },
@@ -77,6 +81,9 @@ export function createLeadStateMachine(initialState = "NEW") {
                     INTEREST_DETECTED: "INTERESTED",
                     CALLBACK_REQUESTED: "CALLBACK_SCHEDULED",
                     NOT_INTERESTED: "NOT_INTERESTED",
+                    NO_RESPONSE: "NO_RESPONSE",
+                    CLOSE_LOST: "CLOSED_LOST",
+                    CLOSE_UNQUALIFIED: "CLOSED_UNQUALIFIED",
                     DNC: "SUPPRESSED_DNC",
                     SUPPRESS_DNC: "SUPPRESSED_DNC",
                 },
@@ -90,6 +97,10 @@ export function createLeadStateMachine(initialState = "NEW") {
                     WARM_TRANSFER: "WARM_TRANSFER",
                     NOT_INTERESTED: "NOT_INTERESTED",
                     NO_RESPONSE: "NO_RESPONSE",
+                    RE_ENGAGE: "RE_ENGAGEMENT_POOL",
+                    CLOSE_WON: "CLOSED_WON",
+                    CLOSE_LOST: "CLOSED_LOST",
+                    CLOSE_UNQUALIFIED: "CLOSED_UNQUALIFIED",
                     DNC: "SUPPRESSED_DNC",
                     SUPPRESS_DNC: "SUPPRESSED_DNC",
                 },
@@ -105,6 +116,8 @@ export function createLeadStateMachine(initialState = "NEW") {
                     CLOSE_LOST: "CLOSED_LOST",
                     CLOSE_UNQUALIFIED: "CLOSED_UNQUALIFIED",
                     NOT_INTERESTED: "NOT_INTERESTED",
+                    NO_RESPONSE: "NO_RESPONSE",
+                    RE_ENGAGE: "RE_ENGAGEMENT_POOL",
                     DNC: "SUPPRESSED_DNC",
                     SUPPRESS_DNC: "SUPPRESSED_DNC",
                 },
@@ -158,6 +171,7 @@ export function createLeadStateMachine(initialState = "NEW") {
                 on: {
                     RE_ENGAGE: "RE_ENGAGEMENT_POOL",
                     CLOSE_UNQUALIFIED: "CLOSED_UNQUALIFIED",
+                    CLOSE_LOST: "CLOSED_LOST",
                     DNC: "SUPPRESSED_DNC",
                     SUPPRESS_DNC: "SUPPRESSED_DNC",
                 },
@@ -184,6 +198,7 @@ export function createLeadStateMachine(initialState = "NEW") {
 
 export function transitionLeadState(currentState, eventName, context = {}) {
     if (!currentState) currentState = "NEW";
+    if (String(currentState).toUpperCase() === "ATTEMPTED") currentState = "CONTACTED";
     if (TERMINAL_STATES.includes(currentState)) {
         return {
             nextState: currentState,

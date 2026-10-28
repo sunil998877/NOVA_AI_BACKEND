@@ -5,6 +5,7 @@ import { verifyCaptcha } from "../../utils/captcha.js";
 import { signAuthToken } from "../../utils/jwt.js";
 import { toPublicUser } from "../../utils/user.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { bindSignupAccount } from "../../services/ase/orgBinding.service.js";
 
 export const signup = asyncHandler(async (req, res) => {
     const {
@@ -14,6 +15,7 @@ export const signup = asyncHandler(async (req, res) => {
         password,
         confirmPassword,
         captchaToken,
+        inviteToken,
     } = req.body;
 
     const captcha = await verifyCaptcha(captchaToken);
@@ -21,7 +23,8 @@ export const signup = asyncHandler(async (req, res) => {
         return res.status(400).json({ error: captcha.error });
     }
 
-    if (!fullName || !organization || !email || !password || !confirmPassword) {
+    const hasInvite = Boolean(String(inviteToken || "").trim());
+    if (!fullName || !email || !password || !confirmPassword || (!hasInvite && !organization)) {
         return res.status(400).json({ error: "All signup fields are required" });
     }
 
@@ -39,16 +42,24 @@ export const signup = asyncHandler(async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.create({
-        fullName,
-        organization,
-        email,
-        passwordHash,
-        authProvider: "local",
-    });
+    let bound;
+    try {
+        bound = await bindSignupAccount({
+            fullName,
+            organization,
+            email,
+            passwordHash,
+            authProvider: "local",
+            inviteToken,
+        });
+    } catch (err) {
+        return res.status(err.status || 500).json({ error: err.message || "Could not create account" });
+    }
+
+    const user = bound.user;
 
     try {
-        const orgId = Number(user.organization_id || 1);
+        const orgId = Number(user.organization_id);
         const nameParts = (fullName || "").trim().split(/\s+/);
         const firstName = nameParts[0] || fullName;
         const lastName = nameParts.slice(1).join(" ") || "";
@@ -58,8 +69,8 @@ export const signup = asyncHandler(async (req, res) => {
             name: fullName,
             first_name: firstName,
             last_name: lastName,
-            email: email,
-            company: organization || "Direct Signup",
+            email,
+            company: user.organization || organization || "Direct Signup",
             source: "SIGNUP",
             priority: 75,
             status: "NEW",

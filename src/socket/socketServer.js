@@ -2,6 +2,7 @@ import { Server } from "socket.io";
 import { env } from "../config/env.js";
 import { socketAuth } from "./socketAuth.js";
 import { registerChatHandlers } from "./chatHandlers.js";
+import { registerAsePresenceHandlers } from "./asePresenceHandlers.js";
 
 let ioInstance = null;
 
@@ -52,6 +53,7 @@ export function initSocketServer(httpServer) {
     
     io.on("connection", (socket) => {
         registerChatHandlers(io, socket);
+        registerAsePresenceHandlers(io, socket);
     });
 
     ioInstance = io;

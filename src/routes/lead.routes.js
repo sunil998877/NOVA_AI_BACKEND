@@ -1,10 +1,11 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { authenticate } from "../middleware/auth.middleware.js";
+import { authenticate, requireAseAdmin, requireAseRole } from "../middleware/auth.middleware.js";
 import { authenticateLeadApi } from "../middleware/leadApiKey.middleware.js";
 import { ingestLeadsFromApi } from "../controllers/Lead/api-intake.controller.js";
 import { importCsv, previewCsv } from "../controllers/Lead/csv-import.controller.js";
-import { deleteLead, getLead, leadStats, getAseReports, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail } from "../controllers/Lead/manage.controller.js";
+import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail } from "../controllers/Lead/manage.controller.js";
+import { exportAseReportsCsv, getAseReports, getComplianceLog, listSegments } from "../controllers/Lead/reports.controller.js";
 import { getLeadDecision, getLeadConversionPrediction, getBrainStatus, updateBrainMode, getBrainEvaluation, getOperatingModeStatus, updateOperatingMode } from "../controllers/Lead/brain.controller.js";
 const router = Router();
 
@@ -19,28 +20,31 @@ const leadIngestLimiter = rateLimit({
 router.post("/", leadIngestLimiter, authenticateLeadApi, ingestLeadsFromApi);
 router.post("/webhook", leadIngestLimiter, authenticateLeadApi, ingestLeadsFromApi);
 
-router.post("/import-csv/preview", authenticate, previewCsv);
-router.post("/import-csv", authenticate, importCsv);
+router.post("/import-csv/preview", authenticate, requireAseRole, previewCsv);
+router.post("/import-csv", authenticate, requireAseRole, importCsv);
 
-router.get("/api-config", authenticate, getApiCaptureConfig);
-router.post("/api-key/rotate", authenticate, rotateApiCaptureKey);
+router.get("/api-config", authenticate, requireAseAdmin, getApiCaptureConfig);
+router.post("/api-key/rotate", authenticate, requireAseAdmin, rotateApiCaptureKey);
 
-router.get("/brain/status", authenticate, getBrainStatus);
-router.post("/brain/mode", authenticate, updateBrainMode);
-router.get("/brain/evaluation", authenticate, getBrainEvaluation);
-router.get("/operating-mode", authenticate, getOperatingModeStatus);
-router.post("/operating-mode", authenticate, updateOperatingMode);
+router.get("/brain/status", authenticate, requireAseRole, getBrainStatus);
+router.post("/brain/mode", authenticate, requireAseAdmin, updateBrainMode);
+router.get("/brain/evaluation", authenticate, requireAseAdmin, getBrainEvaluation);
+router.get("/operating-mode", authenticate, requireAseRole, getOperatingModeStatus);
+router.post("/operating-mode", authenticate, requireAseAdmin, updateOperatingMode);
 
-router.get("/", authenticate, listLeads);
-router.get("/team-reps", authenticate, listTeamReps);
-router.get("/stats", authenticate, leadStats);
-router.get("/reports", authenticate, getAseReports);
-router.get("/:id/decision", authenticate, getLeadDecision);
-router.get("/:id/conversion-prediction", authenticate, getLeadConversionPrediction);
-router.get("/:id", authenticate, getLead);
-router.post("/:id/execute", authenticate, executeLeadAction);
-router.post("/:id/draft-email", authenticate, draftLeadEmail);
-router.patch("/:id", authenticate, updateLead);
-router.delete("/:id", authenticate, deleteLead);
+router.get("/", authenticate, requireAseRole, listLeads);
+router.get("/team-reps", authenticate, requireAseRole, listTeamReps);
+router.get("/stats", authenticate, requireAseRole, leadStats);
+router.get("/reports", authenticate, requireAseRole, getAseReports);
+router.get("/reports.csv", authenticate, requireAseRole, exportAseReportsCsv);
+router.get("/reports/compliance", authenticate, requireAseAdmin, getComplianceLog);
+router.get("/segments", authenticate, requireAseRole, listSegments);
+router.get("/:id/decision", authenticate, requireAseRole, getLeadDecision);
+router.get("/:id/conversion-prediction", authenticate, requireAseRole, getLeadConversionPrediction);
+router.get("/:id", authenticate, requireAseRole, getLead);
+router.post("/:id/execute", authenticate, requireAseRole, executeLeadAction);
+router.post("/:id/draft-email", authenticate, requireAseRole, draftLeadEmail);
+router.patch("/:id", authenticate, requireAseRole, updateLead);
+router.delete("/:id", authenticate, requireAseAdmin, deleteLead);
 
 export default router;

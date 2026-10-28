@@ -250,6 +250,35 @@ export const Callback = {
         }
     },
 
+    async cancelOpenForLead(orgId, leadId, reason = "Cancelled") {
+        const note = ` | ${String(reason || "Cancelled").slice(0, 180)}`;
+        const result = await execute(
+            `UPDATE ${table}
+             SET status = 'CANCELLED',
+                 notes = CONCAT(IFNULL(notes, ''), ?)
+             WHERE organization_id = ? AND lead_id = ?
+               AND status NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')`,
+            [note, Number(orgId), Number(leadId)]
+        );
+        return Number(result?.affectedRows || 0);
+    },
+
+    async countOpenByRep(orgId) {
+        const rows = await query(
+            `SELECT assigned_rep_id, COUNT(*) AS total FROM ${table}
+             WHERE organization_id = ?
+               AND assigned_rep_id IS NOT NULL
+               AND status IN ('OPEN', 'SCHEDULED', 'DUE', 'IN_PROGRESS', 'OVERDUE', 'REQUESTED')
+             GROUP BY assigned_rep_id`,
+            [Number(orgId || 1)]
+        );
+        const counts = {};
+        for (const row of rows || []) {
+            counts[Number(row.assigned_rep_id)] = Number(row.total || 0);
+        }
+        return counts;
+    },
+
     async countStats(orgId) {
         const rows = await query(
             `SELECT 

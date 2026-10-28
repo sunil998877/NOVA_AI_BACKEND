@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate } from "../middleware/auth.middleware.js";
+import { authenticate, requireAseAdmin, requireAseRole } from "../middleware/auth.middleware.js";
 import {
     listSequences,
     getSequence,
@@ -28,40 +28,41 @@ import {
 } from "../controllers/FollowUp/followUp.controller.js";
 
 const router = Router();
+router.use(authenticate, requireAseRole);
 
-router.get("/sequences", authenticate, listSequences);
-router.post("/sequences", authenticate, createSequence);
-router.get("/sequences/:id", authenticate, getSequence);
-router.patch("/sequences/:id", authenticate, updateSequence);
-router.delete("/sequences/:id", authenticate, deleteSequence);
+router.get("/sequences", listSequences);
+router.post("/sequences", requireAseAdmin, createSequence);
+router.get("/sequences/:id", getSequence);
+router.patch("/sequences/:id", requireAseAdmin, updateSequence);
+router.delete("/sequences/:id", requireAseAdmin, deleteSequence);
 
-router.get("/automation/status", authenticate, getAutomationStatus);
-router.post("/automation/start", authenticate, startAutomation);
-router.post("/automation/pause", authenticate, pauseAutomation);
-router.post("/automation/resume", authenticate, resumeAutomation);
-router.post("/automation/stop", authenticate, stopAutomation);
+router.get("/automation/status", getAutomationStatus);
+router.post("/automation/start", requireAseAdmin, startAutomation);
+router.post("/automation/pause", requireAseAdmin, pauseAutomation);
+router.post("/automation/resume", requireAseAdmin, resumeAutomation);
+router.post("/automation/stop", requireAseAdmin, stopAutomation);
 
-router.get("/enrollments", authenticate, listEnrollments);
-router.post("/enrollments", authenticate, enrollLead);
-router.get("/enrollments/:id", authenticate, getEnrollment);
-router.patch("/enrollments/:id/pause", authenticate, pauseEnrollment);
-router.post("/enrollments/:id/pause", authenticate, pauseEnrollment);
-router.patch("/enrollments/:id/resume", authenticate, resumeEnrollment);
-router.post("/enrollments/:id/resume", authenticate, resumeEnrollment);
-router.patch("/enrollments/:id/stop", authenticate, stopEnrollment);
-router.post("/enrollments/:id/stop", authenticate, stopEnrollment);
-router.patch("/enrollments/:id/cancel", authenticate, cancelEnrollment);
-router.post("/enrollments/:id/cancel", authenticate, cancelEnrollment);
-router.patch("/enrollments/:id/mark-processed", authenticate, markReplyProcessed);
-router.post("/enrollments/:id/mark-processed", authenticate, markReplyProcessed);
+router.get("/enrollments", listEnrollments);
+router.post("/enrollments", enrollLead);
+router.get("/enrollments/:id", getEnrollment);
+router.patch("/enrollments/:id/pause", pauseEnrollment);
+router.post("/enrollments/:id/pause", pauseEnrollment);
+router.patch("/enrollments/:id/resume", resumeEnrollment);
+router.post("/enrollments/:id/resume", resumeEnrollment);
+router.patch("/enrollments/:id/stop", stopEnrollment);
+router.post("/enrollments/:id/stop", stopEnrollment);
+router.patch("/enrollments/:id/cancel", cancelEnrollment);
+router.post("/enrollments/:id/cancel", cancelEnrollment);
+router.patch("/enrollments/:id/mark-processed", markReplyProcessed);
+router.post("/enrollments/:id/mark-processed", markReplyProcessed);
 
-router.get("/replies", authenticate, listReplies);
-router.get("/blocked-tasks", authenticate, listBlockedTasks);
+router.get("/replies", listReplies);
+router.get("/blocked-tasks", listBlockedTasks);
 
-router.get("/leads/:leadId", authenticate, getLeadJourney);
+router.get("/leads/:leadId", getLeadJourney);
 
-router.get("/tasks/:id/preview", authenticate, previewTaskContent);
-router.patch("/tasks/:id", authenticate, updateTask);
-router.post("/tasks/:id/retry", authenticate, retryTask);
+router.get("/tasks/:id/preview", previewTaskContent);
+router.patch("/tasks/:id", updateTask);
+router.post("/tasks/:id/retry", retryTask);
 
 export default router;

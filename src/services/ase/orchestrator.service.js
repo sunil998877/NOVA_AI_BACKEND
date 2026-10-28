@@ -1,24 +1,29 @@
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
-import { Callback } from "../../models/callback.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { ASE_OUTCOMES, shouldQueueHumanHandoff } from "./outcomeNormalizer.service.js";
 import { transitionLeadState, TERMINAL_STATES } from "./leadStateMachine.js";
 import { eventBus } from "./eventBus.service.js";
 import { aseDecisionEngine } from "./brain/aseDecisionEngine.service.js";
 import { decisionFeedbackService } from "./brain/decisionFeedback.service.js";
-import { query } from "../../config/db.js";
-import { followUpEngine } from "../followup/followUpEngine.service.js";
+import { haltOutreachForLead } from "./outreachHalt.service.js";
 import { env } from "../../config/env.js";
 import { calculateNextCallingTime } from "./callingHours.service.js";
-
-const MAX_EMAILS = 3;
-const MAX_CALLS = 2;
+import { applyCapacityGate } from "./capacityPacingGate.service.js";
+import { applyCapsExhaust, applyTerminalClose } from "./lifecycleClose.service.js";
+import { HOT_STATUSES, MAX_CALLS, MAX_EMAILS } from "./lifecycle.constants.js";
+import { evaluateCapsExhaust, isOutreachStopped } from "./lifecycle.service.js";
+import { isAlreadyHumanHandoff, queueCallbackHandoff } from "./callbackHandoff.service.js";
+import { attemptWarmTransfer } from "./warmTransfer.service.js";
+import { WARM_TRANSFER_ACTIONS } from "./warmTransfer.constants.js";
 
 export const OrchestratorService = {
     async evaluateNextAction(lead) {
-        if (!lead || TERMINAL_STATES.includes(lead.status) || lead.do_not_contact) {
+        if (!lead || isOutreachStopped(lead) || TERMINAL_STATES.includes(lead.status)) {
             return { action: null, reason: "Lead is terminal or DNC" };
+        }
+        if (HOT_STATUSES.includes(String(lead.status || "").toUpperCase()) || String(lead.next_action || "").toUpperCase() === "REP_CALLBACK") {
+            return { action: null, reason: "Human handoff in progress" };
         }
 
         const orgId = Number(lead.organization_id || 1);
@@ -30,45 +35,24 @@ export const OrchestratorService = {
         });
 
         if (isSuppressed) {
-            const transition = transitionLeadState(lead.status, "SUPPRESS_DNC", {
+            await applyTerminalClose(lead, {
+                status: "SUPPRESSED_DNC",
+                eventName: "SUPPRESS_DNC",
                 reason: isSuppressed.reason || "Suppression match",
-            });
-            await Lead.updateById(
-                lead.id,
-                { status: transition.nextState, do_not_contact: 1, next_action: null, next_action_time: null },
-                orgId
-            );
+            }).catch(() => null);
             await eventBus.publish("LeadSuppressed", {
                 organization_id: orgId,
                 lead_id: lead.id,
                 channel: "SYSTEM",
-                status: transition.nextState,
+                status: "SUPPRESSED_DNC",
                 reason: isSuppressed.reason || "Suppression match",
             });
             return { action: null, reason: "Lead matched suppression list" };
         }
 
-        const counters = typeof lead.attempt_counters === "string"
-            ? JSON.parse(lead.attempt_counters || "{}")
-            : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
-
-        if (counters.email >= MAX_EMAILS && counters.voice >= MAX_CALLS) {
-            const transition = transitionLeadState(lead.status, "NO_RESPONSE", {
-                reason: "Max fatigue limits reached across channels",
-            });
-            await Lead.updateById(
-                lead.id,
-                { status: transition.nextState, next_action: null, next_action_time: null },
-                orgId
-            );
-            await eventBus.publish("LeadStateChanged", {
-                organization_id: orgId,
-                lead_id: lead.id,
-                channel: "SYSTEM",
-                from_state: lead.status,
-                to_state: transition.nextState,
-                reason: "Frequency caps exhausted",
-            });
+        const caps = evaluateCapsExhaust(lead, { maxEmails: MAX_EMAILS, maxCalls: MAX_CALLS });
+        if (caps.exhausted) {
+            await applyCapsExhaust(lead).catch(() => null);
             return { action: null, reason: "Frequency caps exhausted" };
         }
 
@@ -131,81 +115,29 @@ export const OrchestratorService = {
                 payload: rawData,
             });
 
-            await followUpEngine.handleSuppression(lead.id, orgId).catch(() => {});
+            await haltOutreachForLead(orgId, lead.id, "Prospect requested DNC during outreach").catch(() => {});
             return;
         }
 
         if (shouldQueueHumanHandoff(outcome, rawData)) {
-            const transition = transitionLeadState(
-                lead.status,
-                outcome === ASE_OUTCOMES.CALLBACK ? "CALLBACK_REQUESTED" : "INTEREST_DETECTED",
-                { outcome, rawData }
-            );
+            if (isAlreadyHumanHandoff(lead)) return;
 
-            let assignedRepId = lead.assigned_rep_id ? Number(lead.assigned_rep_id) : null;
-            if (!assignedRepId) {
-                try {
-                    const reps = await query(
-                        `SELECT id FROM users 
-                         WHERE organization_id = ?
-                         ORDER BY (role = 'SALESPERSON' OR role = 'SALES_MANAGER') DESC, id ASC 
-                         LIMIT 1`,
-                        [orgId]
-                    );
-                    if (reps && reps.length > 0) {
-                        assignedRepId = reps[0].id;
-                    }
-                } catch (repErr) {
-                    console.warn("[Orchestrator] Could not auto-assign rep:", repErr.message);
-                }
+            const channel = String(rawData.channel || "VOICE").toUpperCase();
+            if (channel === "VOICE") {
+                const transfer = await attemptWarmTransfer(lead, { ...rawData, channel, outcome }).catch(() => null);
+                if (transfer?.action === WARM_TRANSFER_ACTIONS.TRANSFER && transfer.applied) return;
+                await queueCallbackHandoff(lead, { ...rawData, channel, outcome }, {
+                    notes: transfer?.reason
+                        ? `Missed live transfer (${transfer.reason}). Bot promised a human. 30-min SLA.`
+                        : "Automated handoff: Prospect showed interest / requested callback.",
+                    reason: transfer?.reason || "handoff",
+                    outcome,
+                    missedTransfer: Boolean(transfer?.reason),
+                });
+                return;
             }
 
-            const dueAt = new Date(Date.now() + 30 * 60 * 1000);
-            const callId = rawData.callId ? Number(rawData.callId) : (rawData.call_id ? Number(rawData.call_id) : null);
-            const callback = await Callback.create({
-                organization_id: orgId,
-                lead_id: lead.id,
-                call_id: callId,
-                assigned_rep_id: assignedRepId,
-                due_at: dueAt,
-                requested_at: new Date(),
-                status: "OPEN",
-                notes: `Automated handoff: Prospect showed interest / requested callback.`,
-            });
-
-            await followUpEngine.handleMeetingBooked(lead.id, orgId).catch(() => {});
-
-            await Lead.updateById(
-                lead.id,
-                {
-                    status: transition.nextState,
-                    assigned_rep_id: assignedRepId,
-                    callback_due: dueAt,
-                    health: "AMBER",
-                    next_action: "REP_CALLBACK",
-                    next_action_time: null,
-                },
-                orgId
-            );
-
-            await eventBus.publish("ChannelOutcomeReceived", {
-                organization_id: orgId,
-                lead_id: lead.id,
-                channel: rawData.channel || "VOICE",
-                outcome,
-                rawData,
-            });
-
-            await eventBus.publish("CallbackCreated", {
-                organization_id: orgId,
-                lead_id: lead.id,
-                channel: "SYSTEM",
-                status: transition.nextState,
-                callback_id: callback.id,
-                due_at: dueAt,
-                call_id: callback.call_id,
-                rawData,
-            });
+            await queueCallbackHandoff(lead, { ...rawData, outcome }, { outcome });
             return;
         }
 
@@ -331,7 +263,7 @@ export const OrchestratorService = {
         if (!lead || TERMINAL_STATES.includes(lead.status) || lead.do_not_contact) {
             return { scheduled: false, reason: "Lead is terminal or DNC" };
         }
-        if (lead.next_action === "REP_CALLBACK") {
+        if (lead.next_action === "REP_CALLBACK" || ["WARM_TRANSFER", "HANDED_OFF", "CALLBACK_SCHEDULED"].includes(String(lead.status || "").toUpperCase())) {
             return { scheduled: false, reason: "Human callback already queued" };
         }
 
@@ -349,6 +281,14 @@ export const OrchestratorService = {
         }
 
         const orgId = Number(lead.organization_id || 1);
+        const capacity = await applyCapacityGate(lead, "CALL", { reserve: false });
+        if (!capacity.allowed) {
+            return {
+                scheduled: false,
+                reason: capacity.reason,
+                shiftedTo: capacity.shiftedAction,
+            };
+        }
         const decision = await this.evaluateNextAction(lead);
         const delayHours = Number.isFinite(Number(decision.delayHours))
             ? Math.max(0.25, Number(decision.delayHours))

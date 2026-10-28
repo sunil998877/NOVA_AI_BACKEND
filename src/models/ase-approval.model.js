@@ -125,4 +125,14 @@ export const AseApproval = {
         );
         return this.findById(orgId, id);
     },
+
+    async cancelPendingForLead(orgId, leadId, reason = "Cancelled") {
+        const result = await execute(
+            `UPDATE ${table}
+             SET status = 'REJECTED', reviewed_at = ?, payload = ?
+             WHERE organization_id = ? AND lead_id = ? AND status = 'PENDING'`,
+            [new Date(), JSON.stringify({ reason }), Number(orgId), Number(leadId)]
+        );
+        return Number(result?.affectedRows || 0);
+    },
 };

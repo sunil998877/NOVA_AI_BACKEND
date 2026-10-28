@@ -137,6 +137,9 @@ export const env = {
     callingHoursStart: Number(process.env.ASE_CALLING_HOURS_START || 9),
     callingHoursEnd: Number(process.env.ASE_CALLING_HOURS_END || 20),
     callingTimezone: process.env.ASE_CALLING_TIMEZONE || "Asia/Kolkata",
+    emailsPerHour: Number(process.env.ASE_EMAILS_PER_HOUR || 60),
+    callsPerHour: Number(process.env.ASE_CALLS_PER_HOUR || 20),
+    quietDays: Number(process.env.ASE_QUIET_DAYS || 14),
     bypassTimingGates: process.env.ASE_BYPASS_TIMING_GATES === "true"
         || process.env.ASE_BYPASS_TIMING_GATES === "1"
         || (

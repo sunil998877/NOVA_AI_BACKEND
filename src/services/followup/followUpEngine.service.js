@@ -150,17 +150,17 @@ export const followUpEngine = {
             return { status: "skipped", reason: "dnc" };
         }
 
-        if (lead.email_consent && typeof lead.email_consent === "object" && lead.email_consent.status === "DENIED") {
+        if (!lead.email_consent || lead.email_consent.status !== "GRANTED") {
             await LeadEvent.create({
                 organization_id: orgId,
                 lead_id: lead.id,
                 channel: "SYSTEM",
                 event_type: "FOLLOW_UP_SKIPPED",
                 status: "SKIPPED",
-                payload: { reason: "Email consent was denied" },
-                idempotency_key: `lead_${lead.id}_skip_consent_denied`,
+                payload: { reason: "Email consent has not been granted" },
+                idempotency_key: `lead_${lead.id}_skip_consent_not_granted`,
             });
-            return { status: "skipped", reason: "consent_denied" };
+            return { status: "skipped", reason: "consent_not_granted" };
         }
 
         const domain = lead.email ? lead.email.split("@")[1] : null;

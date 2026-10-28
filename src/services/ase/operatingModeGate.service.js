@@ -1,21 +1,12 @@
-import { query } from "../../config/db.js";
-import { Lead } from "../../models/lead.model.js";
 import { canAutoDispatch, getOperatingMode } from "./operatingMode.service.js";
 import { enqueuePendingApproval } from "./approvalQueue.service.js";
+import { applyHotLeadAssignment } from "./routingAssign.service.js";
 
 async function assignRepIfMissing(lead) {
     if (lead.assigned_rep_id) return lead;
-    const orgId = Number(lead.organization_id || 1);
     try {
-        const reps = await query(
-            `SELECT id FROM users
-             WHERE organization_id = ?
-             ORDER BY (role = 'SALESPERSON' OR role = 'SALES_MANAGER') DESC, id ASC
-             LIMIT 1`,
-            [orgId]
-        );
-        if (!reps?.length) return lead;
-        return await Lead.updateById(lead.id, { assigned_rep_id: reps[0].id }, orgId) || lead;
+        const routed = await applyHotLeadAssignment(lead, { reason: "human_escalation" });
+        return routed.lead || lead;
     } catch (err) {
         console.warn("[ASE] Could not auto-assign rep for Human Escalation:", err.message);
         return lead;

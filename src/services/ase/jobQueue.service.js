@@ -16,6 +16,7 @@ class JobQueueService {
         this.queue = null;
         this.worker = null;
         this.localQueue = [];
+        this.voiceInFlight = 0;
         this.metrics = {
             totalEnqueued: 0,
             totalProcessed: 0,
@@ -121,10 +122,25 @@ class JobQueueService {
         }, 5000);
     }
 
+    getVoiceInFlight() {
+        return this.voiceInFlight;
+    }
+
+    beginVoiceJob() {
+        this.voiceInFlight += 1;
+        return this.voiceInFlight;
+    }
+
+    endVoiceJob() {
+        this.voiceInFlight = Math.max(0, this.voiceInFlight - 1);
+        return this.voiceInFlight;
+    }
+
     getMetrics() {
         return {
             ...this.metrics,
             pendingLocalJobs: this.localQueue.length,
+            voiceInFlight: this.voiceInFlight,
             timestamp: new Date().toISOString(),
         };
     }

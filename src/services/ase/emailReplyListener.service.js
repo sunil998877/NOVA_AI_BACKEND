@@ -11,6 +11,7 @@ import { normalizeChannelOutcome, ASE_OUTCOMES } from "./outcomeNormalizer.servi
 import { classifyInteractionIntent } from "./brain/intentClassification.service.js";
 import { getIo } from "../../socket/socketServer.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
+import { haltOutreachForLead } from "./outreachHalt.service.js";
 
 function extractCleanReply(text) {
     if (!text) return "";
@@ -404,7 +405,7 @@ class EmailReplyListenerService {
         }
 
         if (outcome === ASE_OUTCOMES.DNC) {
-            await followUpEngine.handleSuppression(lead.id, orgId).catch(() => {});
+            await haltOutreachForLead(orgId, lead.id, "Prospect requested DNC by email reply").catch(() => {});
         }
 
         const currentScore = Number(lead.priority || 50);
