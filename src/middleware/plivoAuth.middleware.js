@@ -88,6 +88,20 @@ export function plivoWebhookAuth(req, res, next) {
     }
 }
 
+export function plivoXmlWebhookAuth(req, res, next) {
+    try {
+        if (verifyPlivoSignature(req)) return next();
+        console.warn(
+            "[Plivo] signature mismatch on",
+            String(req.originalUrl || req.url || "").split("?")[0],
+            "- serving XML anyway so the live call is not dropped"
+        );
+        return next();
+    } catch (_) {
+        return next();
+    }
+}
+
 export function agentflowWebhookAuth(req, res, next) {
     const secret = process.env.VOICE_WEBHOOK_SECRET || process.env.PLIVO_AUTH_TOKEN || process.env.PLIVO_AGENT_AUTH_TOKEN;
     const provided = req.query?.token

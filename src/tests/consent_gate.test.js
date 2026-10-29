@@ -19,6 +19,7 @@ test("intake defaults consent to UNKNOWN and never treats it as GRANTED", () => 
     assert.equal(consentFromIntake(null, true, "CSV_IMPORT").status, CONSENT_STATUSES.GRANTED);
     assert.equal(consentFromIntake(null, true, "CSV_IMPORT").source, CONSENT_SOURCES.IMPORT);
     assert.equal(consentFromIntake(null, "yes", "CSV_IMPORT").status, CONSENT_STATUSES.GRANTED);
+    assert.equal(consentFromIntake(null, false, "MANUAL").status, CONSENT_STATUSES.UNKNOWN);
     assert.equal(consentFromIntake(null, "no", "CSV_IMPORT").status, CONSENT_STATUSES.DENIED);
 });
 

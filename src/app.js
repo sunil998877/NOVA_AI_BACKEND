@@ -27,6 +27,7 @@ import { runAseIntegrationTests } from "./tests/ase_integration.test.js";
 import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
 
 export const app = express();
+app.set("trust proxy", true);
 
 app.use(
     cors({

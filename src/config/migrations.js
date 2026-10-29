@@ -799,7 +799,28 @@ export async function runMigrations(pool) {
         migrateLeadEventIdempotency(pool),
         migrateFollowUpSequences(pool),
         migrateOrgOperatingMode(pool),
+        migrateUncheckedVoiceConsentToUnknown(pool),
     ]);
+}
+
+async function migrateUncheckedVoiceConsentToUnknown(pool) {
+    try {
+        const [result] = await pool.query(`
+            UPDATE leads
+            SET voice_consent = JSON_SET(
+                COALESCE(voice_consent, JSON_OBJECT('source', 'MANUAL')),
+                '$.status', 'UNKNOWN'
+            )
+            WHERE JSON_UNQUOTE(JSON_EXTRACT(voice_consent, '$.status')) = 'DENIED'
+              AND LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(voice_consent, '$.source')), 'manual'))
+                  IN ('manual', 'form', 'ingestion', 'ui')
+        `);
+        if (result?.affectedRows) {
+            console.log(`[Migration] Reset ${result.affectedRows} unchecked voice DENIED records to UNKNOWN`);
+        }
+    } catch (error) {
+        console.warn("[Migration] voice consent reset warning:", error.message);
+    }
 }
 
 async function migrateOrgOperatingMode(pool) {

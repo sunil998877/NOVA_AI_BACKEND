@@ -164,6 +164,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
             const agentPayload = {
                 to,
                 from,
+                record: Boolean(payload.record),
                 name: lead.name || "",
                 company: lead.company || research?.company || "",
                 lead_name: lead.name || "",
@@ -270,8 +271,11 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
                     to,
                     answer_url: answerUrl,
                     answer_method: "POST",
+                    hangup_url: callbackUrl,
+                    hangup_method: "POST",
                     callback_url: callbackUrl,
                     callback_method: "POST",
+                    record: Boolean(payload.record),
                     extra_dial_string: payload.extraDialString || "",
                 }),
             });
@@ -361,6 +365,124 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
     <Speak voice="Polly.Aditi" language="en-IN">${this.escapeXml(message)}</Speak>
     <Hangup/>
 </Response>`;
+    }
+
+    generateClickToCallDialXml({ leadNumber, callerId, timeout = 45, dialCallbackUrl } = {}) {
+        const lead = this.escapeXml(leadNumber || "");
+        const from = this.escapeXml(callerId || process.env.PLIVO_PHONE_NUMBER || "");
+        const wait = Number(timeout) > 0 ? Number(timeout) : 45;
+        const callback = dialCallbackUrl
+            ? ` callbackUrl="${this.escapeXml(dialCallbackUrl)}" callbackMethod="POST"`
+            : "";
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial callerId="${from}" timeout="${wait}" timeLimit="3600" hangupOnStar="false" record="true"${callback}>
+        <Number>${lead}</Number>
+    </Dial>
+</Response>`;
+    }
+
+    mpcPath(name, suffix = "") {
+        const room = encodeURIComponent(String(name || "").trim());
+        return `/MultiPartyCall/name_${room}/${suffix}`;
+    }
+
+    extractCallUuid(data = {}) {
+        if (typeof data.request_uuid === "string" && data.request_uuid) return data.request_uuid;
+        if (Array.isArray(data.request_uuid) && data.request_uuid[0]) return data.request_uuid[0];
+        if (Array.isArray(data.calls) && data.calls[0]) {
+            return data.calls[0].call_uuid || data.calls[0].request_uuid || null;
+        }
+        if (data.calls && typeof data.calls === "object") {
+            const first = Object.values(data.calls)[0];
+            if (typeof first === "string") return first;
+            if (first?.call_uuid) return first.call_uuid;
+        }
+        return data.call_uuid || null;
+    }
+
+    async startClickToCallLeg({ to, from, mpcName } = {}) {
+        const dest = String(to || "").trim();
+        const room = String(mpcName || "").trim();
+        if (!dest || !room) {
+            return { status: "FAILED", error: "Primary phone and conference name are required" };
+        }
+        if (!this.isConfigured()) {
+            return { status: "FAILED", error: "Plivo is not configured for click-to-call" };
+        }
+        const result = await this.plivoPost(this.mpcPath(room, "Participant/"), {
+            role: "agent",
+            from: from || process.env.PLIVO_PHONE_NUMBER,
+            to: dest,
+            start_mpc_on_enter: true,
+            stay_alone: true,
+            end_mpc_on_exit: false,
+            ring_timeout: 60,
+            max_duration: 3600,
+            max_participants: 2,
+            enter_sound: "none",
+            exit_sound: "none",
+            dial_music: "real",
+            record: true,
+        });
+        const uuid = this.extractCallUuid(result.rawResponse || {});
+        if (uuid) {
+            result.metadata = { ...(result.metadata || {}), callId: uuid };
+            result.rawResponse = { ...(result.rawResponse || {}), request_uuid: uuid };
+        }
+        return result;
+    }
+
+    async addClickToCallLeadLeg({ mpcName, to, from } = {}) {
+        const dest = String(to || "").trim();
+        const room = String(mpcName || "").trim();
+        if (!dest || !room) {
+            return { status: "FAILED", error: "Lead phone and conference name are required" };
+        }
+        if (!this.isConfigured()) {
+            return { status: "FAILED", error: "Plivo is not configured for click-to-call" };
+        }
+        const result = await this.plivoPost(this.mpcPath(room, "Participant/"), {
+            role: "customer",
+            from: from || process.env.PLIVO_PHONE_NUMBER,
+            to: dest,
+            start_mpc_on_enter: true,
+            stay_alone: false,
+            end_mpc_on_exit: true,
+            ring_timeout: 45,
+            enter_sound: "none",
+            exit_sound: "none",
+            record: true,
+        });
+        const uuid = this.extractCallUuid(result.rawResponse || {});
+        if (uuid) {
+            result.metadata = { ...(result.metadata || {}), callId: uuid };
+            result.rawResponse = { ...(result.rawResponse || {}), request_uuid: uuid, call_uuid: uuid };
+        }
+        return result;
+    }
+
+    async listMpcParticipants(mpcName) {
+        const room = String(mpcName || "").trim();
+        if (!room) return [];
+        const data = await this.plivoGet(this.mpcPath(room, "Participant/"));
+        return Array.isArray(data?.objects) ? data.objects : [];
+    }
+
+    async plivoGet(path) {
+        const auth = this.getAccountAuth();
+        if (!auth) return null;
+        const url = `https://api.plivo.com/v1/Account/${auth.authId}${path}`;
+        try {
+            const response = await fetch(url, {
+                headers: { Authorization: auth.header },
+                signal: AbortSignal.timeout(10000),
+            });
+            if (!response.ok) return null;
+            return response.json().catch(() => null);
+        } catch {
+            return null;
+        }
     }
 
     async plivoPost(path, body) {

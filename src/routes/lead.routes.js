@@ -7,6 +7,7 @@ import { getImportJob, importCsv, listImportJobs, previewCsv } from "../controll
 import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail } from "../controllers/Lead/manage.controller.js";
 import { exportAseReportsCsv, getAseReports, getComplianceLog, listSegments } from "../controllers/Lead/reports.controller.js";
 import { getLeadDecision, getLeadConversionPrediction, getBrainStatus, updateBrainMode, getBrainEvaluation, getOperatingModeStatus, updateOperatingMode } from "../controllers/Lead/brain.controller.js";
+import { getLeadClickToCall, startLeadClickToCall } from "../controllers/Ase/clickToCall.controller.js";
 const router = Router();
 
 const leadIngestLimiter = rateLimit({
@@ -15,6 +16,14 @@ const leadIngestLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Too many lead ingestion requests. Try again in a minute." },
+});
+
+const clickToCallLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many click-to-call attempts. Try again in a minute." },
 });
 
 router.post("/", leadIngestLimiter, authenticateLeadApi, ingestLeadsFromApi);
@@ -43,6 +52,8 @@ router.get("/reports/compliance", authenticate, requireAseAdmin, getComplianceLo
 router.get("/segments", authenticate, requireAseRole, listSegments);
 router.get("/:id/decision", authenticate, requireAseRole, getLeadDecision);
 router.get("/:id/conversion-prediction", authenticate, requireAseRole, getLeadConversionPrediction);
+router.post("/:id/call", clickToCallLimiter, authenticate, requireAseRole, startLeadClickToCall);
+router.get("/:id/call", authenticate, requireAseRole, getLeadClickToCall);
 router.get("/:id", authenticate, requireAseRole, getLead);
 router.post("/:id/execute", authenticate, requireAseRole, executeLeadAction);
 router.post("/:id/draft-email", authenticate, requireAseRole, draftLeadEmail);
