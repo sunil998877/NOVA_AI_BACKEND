@@ -62,6 +62,9 @@ export function consentFromIntake(explicit, flag, source) {
     }
     if (flag === true) return buildConsentRecord({ status: CONSENT_STATUSES.GRANTED, source });
     if (flag === false) return buildConsentRecord({ status: CONSENT_STATUSES.DENIED, source });
+    if (typeof flag === "string" && flag.trim()) {
+        return buildConsentRecord({ status: flag, source });
+    }
     return buildConsentRecord({ status: CONSENT_STATUSES.UNKNOWN, source });
 }
 

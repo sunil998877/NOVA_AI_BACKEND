@@ -65,6 +65,7 @@ test("pending clock uses Hold for now; due uses Send follow-up", () => {
         operatingMode: "AI_RECOMMENDED",
     });
     assert.equal(pending.due, false);
+    assert.equal(pending.held, false);
     assert.equal(pending.primaryLabel, "Hold for now");
     assert.equal(due.due, true);
     assert.equal(due.primaryLabel, "Send follow-up");

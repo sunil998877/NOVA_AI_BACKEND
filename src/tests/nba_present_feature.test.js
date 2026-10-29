@@ -23,6 +23,26 @@ test("feature: the card never says the action is Wait while the model says Email
     assert.match(card.subline, /Wait until|Due now|Ready now/i);
 });
 
+test("feature: held lead shows Unhold and On hold instead of sending", () => {
+    const now = new Date();
+    const card = presentNba({
+        lead: {
+            email: "held@acme.com",
+            next_action: "EMAIL",
+            next_action_time: now,
+            metadata: { outreach_hold: { held: true, previousNextAction: "EMAIL" } },
+        },
+        decision: { action: "EMAIL" },
+        now,
+        operatingMode: "FULLY_AUTOMATED",
+    });
+    assert.equal(card.held, true);
+    assert.equal(card.due, false);
+    assert.equal(card.primaryKind, "UNHOLD");
+    assert.equal(card.primaryLabel, "Unhold");
+    assert.equal(card.waitLine, "On hold");
+});
+
 test("feature: right panel winner matches the left heading channel", () => {
     const email = presentNba({
         lead: { email: "a@b.com", next_action: "WAIT" },

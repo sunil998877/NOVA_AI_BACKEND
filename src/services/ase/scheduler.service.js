@@ -97,6 +97,7 @@ class AseScheduler {
         try {
             const unscheduled = await Lead.findUnscheduledNew(10);
             for (const lead of unscheduled) {
+                if (lead?.metadata?.outreach_hold?.held) continue;
                 if (isCompanyResearchPending(lead)) continue;
                 const orgId = Number(lead.organization_id || 1);
                 const decision = await OrchestratorService.evaluateNextAction(lead);
@@ -161,6 +162,11 @@ class AseScheduler {
 
         if (!workingLead || workingLead.next_action !== action) {
             return { executed: false, reason: "Lead missing or action changed" };
+        }
+
+        const held = Boolean(workingLead?.metadata?.outreach_hold?.held);
+        if (held) {
+            return { executed: false, reason: "Lead outreach is on hold", held: true };
         }
 
         const lifecycle = await applyLifecycleGate(workingLead, action, {

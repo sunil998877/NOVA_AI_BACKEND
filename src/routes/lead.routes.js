@@ -3,7 +3,7 @@ import rateLimit from "express-rate-limit";
 import { authenticate, requireAseAdmin, requireAseRole } from "../middleware/auth.middleware.js";
 import { authenticateLeadApi } from "../middleware/leadApiKey.middleware.js";
 import { ingestLeadsFromApi } from "../controllers/Lead/api-intake.controller.js";
-import { importCsv, previewCsv } from "../controllers/Lead/csv-import.controller.js";
+import { getImportJob, importCsv, listImportJobs, previewCsv } from "../controllers/Lead/csv-import.controller.js";
 import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail } from "../controllers/Lead/manage.controller.js";
 import { exportAseReportsCsv, getAseReports, getComplianceLog, listSegments } from "../controllers/Lead/reports.controller.js";
 import { getLeadDecision, getLeadConversionPrediction, getBrainStatus, updateBrainMode, getBrainEvaluation, getOperatingModeStatus, updateOperatingMode } from "../controllers/Lead/brain.controller.js";
@@ -22,6 +22,8 @@ router.post("/webhook", leadIngestLimiter, authenticateLeadApi, ingestLeadsFromA
 
 router.post("/import-csv/preview", authenticate, requireAseRole, previewCsv);
 router.post("/import-csv", authenticate, requireAseRole, importCsv);
+router.get("/import-jobs", authenticate, requireAseRole, listImportJobs);
+router.get("/import-jobs/:id", authenticate, requireAseRole, getImportJob);
 
 router.get("/api-config", authenticate, requireAseAdmin, getApiCaptureConfig);
 router.post("/api-key/rotate", authenticate, requireAseAdmin, rotateApiCaptureKey);

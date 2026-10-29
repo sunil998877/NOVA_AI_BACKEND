@@ -182,11 +182,19 @@ function headingFor(channel) {
     return `Next Best Action: ${label}`;
 }
 
-function primaryFor({ channel, due, operatingMode, pendingApproval }) {
+export function isLeadOnHold(lead) {
+    const hold = lead?.metadata?.outreach_hold;
+    return Boolean(hold && (hold.held === true || hold.held === 1 || hold.held === "1"));
+}
+
+function primaryFor({ channel, due, operatingMode, pendingApproval, held }) {
     const mode = upper(operatingMode) || "FULLY_AUTOMATED";
     const pending = pendingApproval?.status === "PENDING";
     if (channel === "REP_CALLBACK") {
         return { kind: "CALLBACK", label: "Open callback queue" };
+    }
+    if (held) {
+        return { kind: "UNHOLD", label: "Unhold" };
     }
     if (!due) {
         return { kind: "HOLD", label: "Hold for now" };
@@ -221,9 +229,12 @@ export function presentNba({
     const percents = channelPercents(decision);
     const waitUntil = pickWaitUntil(lead, decision);
     const due = isDueAt(waitUntil, now);
+    const held = isLeadOnHold(lead);
     const cadence = cadenceFromCounters(lead, decision, cadenceStep);
-    const waitLine = formatWaitUntil(waitUntil, decision.sendWindow?.timezone || lead.timezone || "Asia/Kolkata", now);
-    const primary = primaryFor({ channel, due, operatingMode, pendingApproval });
+    const waitLine = held
+        ? "On hold"
+        : formatWaitUntil(waitUntil, decision.sendWindow?.timezone || lead.timezone || "Asia/Kolkata", now);
+    const primary = primaryFor({ channel, due, operatingMode, pendingApproval, held });
     const heading = headingFor(channel);
     const rightWinner = channel === "REP_CALLBACK" ? "CALL" : channel;
 
@@ -234,7 +245,8 @@ export function presentNba({
         waitLine,
         cadenceStep: cadence,
         subline: [waitLine, cadence].filter(Boolean).join(" · "),
-        due,
+        due: held ? false : due,
+        held,
         primaryKind: primary.kind,
         primaryLabel: primary.label,
         rightWinner,

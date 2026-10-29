@@ -72,6 +72,127 @@ const parseMysqlConfig = () => {
     };
 };
 
+function isRailwayInternalHost(host) {
+    return /\.railway\.internal$/i.test(String(host || ""));
+}
+
+function isLocalRedisFallbackHost(host) {
+    const value = String(host || "").toLowerCase();
+    return value === "127.0.0.1" || value === "localhost" || value === "::1";
+}
+
+function isReachableRedisHost(host, source = process.env) {
+    if (!host) return false;
+    if (isRailwayInternalHost(host) && !isOnRailway(source)) return false;
+    if (/\.ngrok-free\.app$|\.ngrok\.io$/i.test(host)) return false;
+    return true;
+}
+
+function isOnRailway(source = process.env) {
+    return Boolean(source.RAILWAY_ENVIRONMENT || source.RAILWAY_PROJECT_ID || source.RAILWAY_SERVICE_ID);
+}
+
+function buildRedisUrl({ host, port = 6379, username, password, tls = false } = {}) {
+    if (!host) return "";
+    const protocol = tls ? "rediss" : "redis";
+    const user = username ? encodeURIComponent(username) : "";
+    const pass = password ? encodeURIComponent(password) : "";
+    const auth = pass ? `${user || "default"}:${pass}@` : (user ? `${user}@` : "");
+    return `${protocol}://${auth}${host}:${Number(port) || 6379}`;
+}
+
+function redisFromUrl(raw) {
+    const parsed = new URL(raw);
+    const tls = parsed.protocol === "rediss:";
+    return {
+        host: parsed.hostname,
+        port: Number(parsed.port || (tls ? 6380 : 6379)),
+        username: parsed.username ? decodeURIComponent(parsed.username) : "",
+        password: parsed.password ? decodeURIComponent(parsed.password) : "",
+        tls,
+        url: raw,
+    };
+}
+
+export function resolveRedisConfig(source = process.env) {
+    const publicUrl = String(source.REDIS_PUBLIC_URL || source.REDIS_EXTERNAL_URL || "").trim();
+    const privateUrl = String(source.REDIS_URL || source.REDIS_PRIVATE_URL || "").trim();
+    const host = String(source.REDIS_HOST || source.REDISHOST || "").trim();
+    const port = Number(source.REDIS_PORT || source.REDISPORT || 6379) || 6379;
+    const username = String(source.REDIS_USER || source.REDISUSER || source.REDIS_USERNAME || "").trim();
+    const password = String(source.REDIS_PASSWORD || source.REDISPASSWORD || "").trim();
+    const publicHost = String(source.REDIS_PUBLIC_HOST || source.RAILWAY_TCP_PROXY_DOMAIN || "").trim();
+    const publicPort = Number(source.REDIS_PUBLIC_PORT || source.RAILWAY_TCP_PROXY_PORT || 0);
+
+    let parsed = null;
+    const publicLooksInternal = /\.railway\.internal/i.test(publicUrl);
+    const preferPublic = Boolean(publicUrl)
+        && !publicLooksInternal
+        && (!isOnRailway(source) || isRailwayInternalHost(host) || /\.railway\.internal/i.test(privateUrl));
+    const chosenUrl = preferPublic ? publicUrl : (privateUrl || (!publicLooksInternal ? publicUrl : ""));
+
+    if (chosenUrl) {
+        try {
+            parsed = redisFromUrl(chosenUrl);
+        } catch {
+            parsed = null;
+        }
+    }
+
+    if (!parsed && host) {
+        parsed = {
+            host,
+            port,
+            username,
+            password,
+            tls: false,
+            url: buildRedisUrl({ host, port, username, password }),
+        };
+    }
+
+    if (!parsed) {
+        return { url: "", host: "", port: 6379, username: "", password: "", tls: false };
+    }
+
+    if (!parsed.username && username) parsed.username = username;
+    if (!parsed.password && password) parsed.password = password;
+
+    if (!isOnRailway(source) && !isReachableRedisHost(parsed.host, source) && publicHost && isReachableRedisHost(publicHost, source)) {
+        parsed.host = publicHost;
+        if (publicPort) parsed.port = publicPort;
+        parsed.username = username || parsed.username;
+        parsed.password = password || parsed.password;
+        parsed.url = buildRedisUrl({
+            host: parsed.host,
+            port: parsed.port,
+            username: parsed.username,
+            password: parsed.password,
+            tls: parsed.tls,
+        });
+    } else {
+        parsed.url = parsed.url || buildRedisUrl(parsed);
+    }
+
+    if (!isOnRailway(source) && !isReachableRedisHost(parsed.host, source) && !isLocalRedisFallbackHost(parsed.host)) {
+        return {
+            url: "redis://127.0.0.1:6379",
+            host: "127.0.0.1",
+            port: 6379,
+            username: "",
+            password: "",
+            tls: false,
+            fallbackFromInternal: true,
+        };
+    }
+
+    return parsed;
+}
+
+const redis = resolveRedisConfig();
+if (redis.fallbackFromInternal && typeof process.env.NODE_TEST_CONTEXT === "undefined") {
+    console.warn("[Redis] REDIS_URL points at redis.railway.internal, which is not a public URL. Using redis://127.0.0.1:6379 locally.");
+}
+
 export const env = {
     port: Number(process.env.PORT || 3001),
     nodeEnv: process.env.NODE_ENV || "development",
@@ -129,6 +250,11 @@ export const env = {
     leadsApiUserId: (process.env.LEADS_API_USER_ID || "1").trim(),
     leadsApiOrgId: Number(process.env.LEADS_API_ORG_ID || 1),
     aseMlUrl: (process.env.ASE_ML_URL || "http://127.0.0.1:8091").trim(),
+    redis,
+    redisUrl: redis.url,
+    queueRole: String(process.env.ASE_QUEUE_ROLE || "").trim().toLowerCase()
+        || (process.env.NODE_ENV === "production" ? "api" : "all"),
+    researchCacheTtlHours: Number(process.env.ASE_RESEARCH_CACHE_TTL_HOURS || 6),
     autoCallOnEmailOpen: process.env.ASE_AUTO_CALL_ON_OPEN === "true" || process.env.ASE_AUTO_CALL_ON_OPEN === "1",
     autoCallDelaySeconds: Number(process.env.ASE_AUTO_CALL_DELAY_SECONDS || 30),
     callAfterFirstEmailDelayMinutes: Number(process.env.ASE_CALL_AFTER_FIRST_EMAIL_DELAY_MINUTES || 15),

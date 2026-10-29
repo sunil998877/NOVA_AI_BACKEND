@@ -252,6 +252,7 @@ export const Lead = {
     },
 
     async findDueForAction(limit = 20, now = new Date()) {
+        const take = Number(limit) || 20;
         const rows = await query(
             `SELECT ${columns} FROM ${table}
              WHERE next_action_time IS NOT NULL 
@@ -261,9 +262,9 @@ export const Lead = {
                AND next_action IN ('EMAIL', 'CALL', 'WAIT')
              ORDER BY priority DESC, next_action_time ASC
              LIMIT ?`,
-            [now, Number(limit) || 20]
+            [now, Math.max(take * 3, 20)]
         );
-        return rows.map(toLead);
+        return rows.map(toLead).filter((lead) => !lead?.metadata?.outreach_hold?.held).slice(0, take);
     },
 
     async findUnscheduledNew(limit = 10) {

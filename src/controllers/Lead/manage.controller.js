@@ -16,7 +16,8 @@ import { getLeadApproval } from "../../services/ase/approvalQueue.service.js";
 import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
 import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
 import { haltOutreachForLead } from "../../services/ase/outreachHalt.service.js";
-import { isConsentGranted } from "../../services/ase/consent.service.js";
+import { buildConsentRecord, isConsentGranted } from "../../services/ase/consent.service.js";
+import { recordConsentEvent } from "../../services/ase/consentAudit.service.js";
 import { isTerminalStatus, sanitizeNextAction, sanitizeStatus } from "../../services/ase/lifecycle.service.js";
 import { buildNbaCard } from "../../services/ase/nbaCard.service.js";
 import { loggedDecisionFromTimeline } from "../../services/ase/nbaPresent.service.js";
@@ -84,6 +85,34 @@ export const updateLead = asyncHandler(async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const updates = { ...req.body };
+    const actorUserId = req.user.id;
+    const consentChanges = [];
+
+    if (updates.consentEmail !== undefined || updates.email_consent !== undefined) {
+        const next = updates.email_consent && typeof updates.email_consent === "object"
+            ? buildConsentRecord({
+                status: updates.email_consent.status ?? updates.consentEmail,
+                source: updates.email_consent.source || "form",
+                actorUserId,
+            })
+            : buildConsentRecord({ status: updates.consentEmail, source: "form", actorUserId });
+        updates.email_consent = next;
+        delete updates.consentEmail;
+        consentChanges.push(["EMAIL", next]);
+    }
+    if (updates.consentVoice !== undefined || updates.voice_consent !== undefined) {
+        const next = updates.voice_consent && typeof updates.voice_consent === "object"
+            ? buildConsentRecord({
+                status: updates.voice_consent.status ?? updates.consentVoice,
+                source: updates.voice_consent.source || "form",
+                actorUserId,
+            })
+            : buildConsentRecord({ status: updates.consentVoice, source: "form", actorUserId });
+        updates.voice_consent = next;
+        delete updates.consentVoice;
+        consentChanges.push(["VOICE", next]);
+    }
+
     const oldStatus = lead.status;
     if (updates.status) updates.status = sanitizeStatus(updates.status);
     if (Object.prototype.hasOwnProperty.call(updates, "next_action")) {
@@ -122,6 +151,17 @@ export const updateLead = asyncHandler(async (req, res) => {
     }
 
     const updated = await Lead.updateById(lead.id, updates, orgId);
+
+    for (const [channel, consent] of consentChanges) {
+        await recordConsentEvent({
+            organizationId: orgId,
+            leadId: lead.id,
+            channel,
+            status: consent.status,
+            source: consent.source,
+            actorUserId,
+        });
+    }
 
     if (!markDnc && newStatus && isTerminalStatus(newStatus) && newStatus !== oldStatus) {
         await haltOutreachForLead(orgId, lead.id, `Lead closed (${newStatus})`);
@@ -226,6 +266,9 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
     let lead = await Lead.findById(req.params.id, orgId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     if (lead.do_not_contact) return res.status(400).json({ error: "Lead is suppressed (Do Not Contact)" });
+    if (lead?.metadata?.outreach_hold?.held) {
+        return res.status(400).json({ error: "Lead outreach is on hold. Click Unhold first." });
+    }
     if (TERMINAL_STATES.has(lead.status)) return res.status(400).json({ error: "Lead is in a terminal state" });
 
     const startedAt = Date.now();

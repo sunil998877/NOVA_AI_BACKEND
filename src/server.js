@@ -13,6 +13,10 @@ import { aseScheduler } from "./services/ase/scheduler.service.js";
 import { ensureMlService, stopMlService } from "./services/ase/brain/mlServiceProcess.js";
 import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
 import { followUpScheduler } from "./services/followup/followUpScheduler.service.js";
+import { shouldRunQueueWorkers } from "./config/redis.js";
+import { startQueueWorkers, stopQueueWorkers } from "./workers/queue.worker.js";
+import { closeQueues } from "./services/queue/queue.registry.js";
+import { jobQueue } from "./services/ase/jobQueue.service.js";
 
 
 const startServer = () => {
@@ -39,19 +43,18 @@ const startServer = () => {
     });
 
     const mlReady = ensureMlService();
-    process.on("SIGINT", () => {
+    const shutdown = async () => {
         stopMlService();
         emailReplyListener.stop();
         followUpScheduler.stop();
+        await jobQueue.close().catch(() => {});
+        await stopQueueWorkers().catch(() => {});
+        await closeQueues().catch(() => {});
         process.exit(0);
-    });
-    process.on("SIGTERM", () => {
-        stopMlService();
-        emailReplyListener.stop();
-        followUpScheduler.stop();
-        process.exit(0);
-    });
-
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    
     process.on("unhandledRejection", (reason) => {
         console.error("Unhandled Rejection:", reason?.message || reason);
     });
@@ -65,6 +68,9 @@ const startServer = () => {
             aseScheduler.start();
             emailReplyListener.start();
             followUpScheduler.start();
+            if (shouldRunQueueWorkers()) {
+                startQueueWorkers();
+            }
         })
         .catch((err) => {
             console.error("Initial database connection error:", err.message);

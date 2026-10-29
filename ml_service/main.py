@@ -7,6 +7,7 @@ import onnxruntime as ort
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ml_service.features import ACTIONS, FEATURE_NAMES, FEATURE_SCHEMA_VERSION, ROOT, scale_vector
@@ -90,6 +91,16 @@ def health():
         "features": FEATURE_NAMES,
         "data_source": metadata.get("data_source", evaluation.get("data_source")),
     }
+
+
+@app.get("/")
+def root():
+    return health()
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)
 
 
 @app.get("/schema")

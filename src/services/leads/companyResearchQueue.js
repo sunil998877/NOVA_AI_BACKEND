@@ -2,6 +2,7 @@ import { isUsableResearchProfile, researchCompany } from "../ase/companyResearch
 import { storeOutreachDraft } from "../ase/leadEmailDrafter.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
+import { enqueueCompanyResearchJob } from "../queue/enqueue.js";
 
 const LIMIT = 3;
 const pending = [];
@@ -24,7 +25,7 @@ async function kickScheduler() {
     aseScheduler.kick();
 }
 
-export async function researchLeadCompany(lead) {
+export async function researchLeadCompany(lead, options = {}) {
     if (!lead?.id) return null;
     const orgId = Number(lead.organization_id || 1);
     const fresh = await Lead.findById(lead.id, orgId);
@@ -32,7 +33,7 @@ export async function researchLeadCompany(lead) {
 
     const existing = readMetadata(fresh);
     if (isUsableResearchProfile(existing.company_research)) {
-        if (!existing.outreach_email?.subject) {
+        if (!options.skipDraft && !existing.outreach_email?.subject) {
             await storeOutreachDraft(fresh, existing.company_research);
         } else if (existing.company_research_status === "pending") {
             await Lead.updateById(
@@ -63,7 +64,7 @@ export async function researchLeadCompany(lead) {
     };
 
     const researched = await Lead.updateById(fresh.id, { metadata }, orgId);
-    if (usable) {
+    if (usable && !options.skipDraft) {
         await storeOutreachDraft(researched || { ...fresh, metadata }, research);
     }
 
@@ -109,6 +110,14 @@ function drain() {
 export function enqueueLeadCompanyResearch(lead) {
     if (process.env.ASE_SKIP_OUTREACH === "1") return;
     if (!lead?.id) return;
-    pending.push(lead);
-    drain();
+    enqueueCompanyResearchJob(lead)
+        .then((queued) => {
+            if (queued) return;
+            pending.push(lead);
+            drain();
+        })
+        .catch(() => {
+            pending.push(lead);
+            drain();
+        });
 }

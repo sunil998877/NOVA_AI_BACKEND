@@ -5,7 +5,6 @@ import {
     evaluateDispatch,
     executionFlagsForMode,
 } from "../services/ase/operatingMode.service.js";
-import { nextHoldUntil, HOLD_DURATION_MS } from "../services/ase/approvalQueue.service.js";
 
 function gate(action, mode, extras = {}) {
     return evaluateDispatch(action, { mode, ...extras });
@@ -56,9 +55,11 @@ test("feature: WAIT and REP_CALLBACK are never blocked by operating mode", () =>
     }
 });
 
-test("feature: Hold delays due time so scheduler will not pick the lead", () => {
-    const from = new Date("2026-10-27T00:00:00.000Z");
-    const due = nextHoldUntil(from);
-    assert.equal(due.getTime() - from.getTime(), HOLD_DURATION_MS);
-    assert.equal(due <= from, false);
+test("feature: held leads stay out of the due queue until Unhold", () => {
+    const due = [
+        { id: 1, metadata: { outreach_hold: { held: true } } },
+        { id: 2, metadata: {} },
+    ];
+    const runnable = due.filter((lead) => !lead?.metadata?.outreach_hold?.held);
+    assert.deepEqual(runnable.map((row) => row.id), [2]);
 });

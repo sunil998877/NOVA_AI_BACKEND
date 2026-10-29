@@ -2,6 +2,7 @@ import net from "node:net";
 import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { getOpenAiClient } from "../../controllers/OpenAI/client.js";
+import { getCachedResearch, setCachedResearch } from "../queue/cache.service.js";
 
 function getResearchOpenAiClient() {
     const apiKey = String(env.openaiApiKey || "").trim();
@@ -161,6 +162,10 @@ export function rememberCompanyResearch(domain, companyName, research) {
         expires: Date.now() + CACHE_MS,
         research,
     });
+    const normalized = cleanDomain(domain);
+    if (normalized) {
+        setCachedResearch(normalized, research).catch(() => {});
+    }
 }
 
 export async function loadCompanyContext(companyName, { domain = null, leadInfo = {} } = {}) {
@@ -180,8 +185,15 @@ export async function loadCompanyContext(companyName, { domain = null, leadInfo 
         || cleanDomain(leadInfo?.company_website)
         || cleanDomain(leadInfo?.email?.split("@")[1]);
     const effectiveCompany = rawCompany || (effectiveDomain ? effectiveDomain.split(".")[0] : "Unknown organization");
+    let cachedResearch = peekCompanyResearch(effectiveDomain, effectiveCompany);
+    if (!cachedResearch && effectiveDomain) {
+        cachedResearch = await getCachedResearch(effectiveDomain);
+        if (cachedResearch) {
+            rememberCompanyResearch(effectiveDomain, effectiveCompany, cachedResearch);
+        }
+    }
     return {
-        cachedResearch: peekCompanyResearch(effectiveDomain, effectiveCompany),
+        cachedResearch,
         effectiveCompany,
         effectiveDomain,
         siteData: null,

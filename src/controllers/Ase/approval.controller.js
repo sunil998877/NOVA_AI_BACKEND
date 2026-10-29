@@ -6,6 +6,7 @@ import {
     listApprovals,
     prepareLeadApproval,
     reviewApprovalById,
+    unholdLeadApproval,
 } from "../../services/ase/approvalQueue.service.js";
 import { AseApproval } from "../../models/ase-approval.model.js";
 import { APPROVAL_STATUSES } from "../../schema/ase-approval.schema.js";
@@ -65,6 +66,17 @@ export const holdLeadAction = asyncHandler(async (req, res) => {
     const userId = req.user?.id || null;
     try {
         const result = await holdLeadApproval(orgId, req.params.leadId, userId);
+        return res.status(200).json({ success: true, data: result });
+    } catch (err) {
+        return httpError(err, res);
+    }
+});
+
+export const unholdLeadAction = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user?.organization_id || 1);
+    const userId = req.user?.id || null;
+    try {
+        const result = await unholdLeadApproval(orgId, req.params.leadId, userId);
         return res.status(200).json({ success: true, data: result });
     } catch (err) {
         return httpError(err, res);

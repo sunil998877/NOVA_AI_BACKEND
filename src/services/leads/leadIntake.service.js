@@ -402,6 +402,7 @@ export async function processBatch(rawLeads, options = {}) {
 
     const CONCURRENCY = 12;
     let index = 0;
+    const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
 
     const workers = new Array(CONCURRENCY).fill(null).map(async () => {
         while (index < rows.length) {
@@ -425,6 +426,9 @@ export async function processBatch(rawLeads, options = {}) {
                 if (summary.errors.length < 100) {
                     summary.errors.push({ row: i + 1, email: row?.email ?? null, error: error.message });
                 }
+            }
+            if (onProgress && (i + 1) % 25 === 0) {
+                await onProgress(i + 1, summary);
             }
         }
     });
