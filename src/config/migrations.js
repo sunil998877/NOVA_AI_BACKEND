@@ -385,6 +385,12 @@ async function migrateAseFoundation(pool) {
         if (!existingUserCols.has("role")) {
             await pool.query("ALTER TABLE users ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'ORG_ADMIN'");
         }
+        if (!existingUserCols.has("team")) {
+            try { await pool.query("ALTER TABLE users ADD COLUMN team VARCHAR(64) NULL"); } catch (_) {}
+        }
+        if (!existingUserCols.has("territory")) {
+            try { await pool.query("ALTER TABLE users ADD COLUMN territory VARCHAR(255) NULL"); } catch (_) {}
+        }
     } catch (e) {
         console.warn("User migration error:", e.message);
     }
@@ -792,7 +798,26 @@ export async function runMigrations(pool) {
         migrateMukhStyleEmailEngine(pool),
         migrateLeadEventIdempotency(pool),
         migrateFollowUpSequences(pool),
+        migrateOrgOperatingMode(pool),
     ]);
+}
+
+async function migrateOrgOperatingMode(pool) {
+    try {
+        const [rows] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'organizations' AND COLUMN_NAME = 'operating_mode'`
+        );
+        if (!rows.length) {
+            await pool.query(
+                `ALTER TABLE organizations
+                 ADD COLUMN operating_mode VARCHAR(32) NOT NULL DEFAULT 'FULLY_AUTOMATED' AFTER settings`
+            );
+            console.log("[Migration] Added column 'operating_mode' to organizations");
+        }
+    } catch (error) {
+        console.warn("[Migration] migrateOrgOperatingMode warning:", error.message);
+    }
 }
 
 

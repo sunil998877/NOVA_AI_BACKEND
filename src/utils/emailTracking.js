@@ -3,6 +3,7 @@ import { EmailTrackingLink } from "../models/email-tracking-link.model.js";
 import { EmailEvent } from "../models/email-event.model.js";
 import { Mail } from "../models/mail.model.js";
 import { Lead } from "../models/lead.model.js";
+import { User } from "../models/user.model.js";
 import { eventBus } from "../services/ase/eventBus.service.js";
 import { OrchestratorService } from "../services/ase/orchestrator.service.js";
 import { detectEmailScanner } from "./emailScannerDetector.js";
@@ -16,6 +17,19 @@ function newToken() {
 
 function cleanBase(url) {
   return String(url || "").trim().replace(/\/$/, "");
+}
+
+async function resolveLeadForMail(mail, leadId) {
+  if (!mail?.user_id) return null;
+  const user = await User.findById(mail.user_id).catch(() => null);
+  const orgId = user?.organization_id ? Number(user.organization_id) : null;
+  if (!orgId) return null;
+  if (leadId) {
+    const byId = await Lead.findById(leadId, orgId);
+    if (byId) return byId;
+  }
+  if (mail.email) return Lead.findByEmail(orgId, mail.email);
+  return null;
 }
 
 function isTrackableBase(url) {
@@ -223,14 +237,7 @@ export async function handleTrackedOpen({ token, mailId, campaignId, userAgent, 
     console.log(`[TrackOpen] mail=${mail.id} open#${nextOpenCount}`);
 
     try {
-      let lead = null;
-      let leadId = link?.lead_id || null;
-      if (leadId) {
-        lead = await Lead.findById(leadId);
-      }
-      if (!lead && mail.email) {
-        lead = await Lead.findByEmailAnyOrg(mail.email);
-      }
+      const lead = await resolveLeadForMail(mail, link?.lead_id);
 
       if (lead) {
         const scannerResult = detectEmailScanner(userAgent, ipAddress);
@@ -334,14 +341,7 @@ export async function handleTrackedClick({ token, mailId, campaignId, fallbackUr
   });
 
   try {
-    let lead = null;
-    let leadId = link?.lead_id || null;
-    if (leadId) {
-      lead = await Lead.findById(leadId);
-    }
-    if (!lead && mail.email) {
-      lead = await Lead.findByEmailAnyOrg(mail.email);
-    }
+    const lead = await resolveLeadForMail(mail, link?.lead_id);
     if (lead) {
       await eventBus.publish("EMAIL_CLICKED", {
         organization_id: lead.organization_id || 1,

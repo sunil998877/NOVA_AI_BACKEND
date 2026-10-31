@@ -28,9 +28,11 @@ async function isHealthy() {
 function startChild() {
     if (child || shuttingDown) return;
     const port = new URL(serviceBase()).port || "8091";
+    const args = ["-m", "uvicorn", "ml_service.main:app", "--host", "127.0.0.1", "--port", port];
+    if (env.nodeEnv !== "production") args.push("--reload");
     child = spawn(
         "python",
-        ["-m", "uvicorn", "ml_service.main:app", "--host", "127.0.0.1", "--port", port],
+        args,
         { cwd: backendRoot, stdio: "inherit", windowsHide: true }
     );
     child.on("error", (error) => {

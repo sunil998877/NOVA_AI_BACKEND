@@ -144,7 +144,7 @@ describe("Automatic AI Calling After Email Opens in NOVA + ASE", () => {
     assert.match(eligibility.reason, /terminal state/);
   });
 
-  test("8. Orchestrator schedules durable call job on eligible lead email open", async () => {
+  test("8. Email open never dispatches an autonomous call", async () => {
     const mockLead = {
       id: 8881,
       organization_id: 1,
@@ -163,12 +163,11 @@ describe("Automatic AI Calling After Email Opens in NOVA + ASE", () => {
     });
 
     assert.equal(result.handled, true);
-    assert.equal(result.callScheduled, true);
-    assert.ok(result.scheduledTime instanceof Date);
-    assert.equal(mockLead.status, "ENGAGED");
+    assert.equal(result.callScheduled, false);
+    assert.match(result.reason, /does not dispatch a call/i);
   });
 
-  test("9. Orchestrator suppresses automated bot opens from triggering calls", async () => {
+  test("9. Scanner opens also do not dispatch a call", async () => {
     const mockLead = {
       id: 8882,
       organization_id: 1,
@@ -189,7 +188,6 @@ describe("Automatic AI Calling After Email Opens in NOVA + ASE", () => {
 
     assert.equal(result.handled, true);
     assert.equal(result.callScheduled, false);
-    assert.match(result.reason, /Suppressed scanner open/);
   });
 
   test("10. Voice bot adapter executes call with simulated fallback when provider unconfigured", async () => {

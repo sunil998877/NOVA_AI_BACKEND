@@ -150,6 +150,12 @@ export async function runAseIntegrationTests() {
         }, "EMAIL");
         assert("Compliance gate blocks denied email consent", gateDeniedConsent.eligible === false);
 
+        const gateUnknownConsent = await validateDispatchEligibility({
+            ...freshLead,
+            email_consent: { status: "UNKNOWN" },
+        }, "EMAIL");
+        assert("Compliance gate blocks unknown email consent", gateUnknownConsent.eligible === false);
+
         const gateDeniedVoice = await validateDispatchEligibility({
             ...freshLead,
             voice_consent: { status: "DENIED" },

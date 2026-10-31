@@ -10,7 +10,18 @@ class ModelRegistry {
         this.modelDir = path.resolve(__dirname, "../../../models/ml");
         this.modelPath = path.join(this.modelDir, "lead_next_action.onnx");
         this.metaPath = path.join(this.modelDir, "lead_next_action_meta.json");
-        this.mode = process.env.ASE_BRAIN_MODE || "ACTIVE";
+        this.modePath = path.join(this.modelDir, "brain_mode.json");
+        this.mode = this.readPersistedMode() || process.env.ASE_BRAIN_MODE || "ACTIVE";
+    }
+
+    readPersistedMode() {
+        try {
+            if (!fs.existsSync(this.modePath)) return null;
+            const parsed = JSON.parse(fs.readFileSync(this.modePath, "utf-8"));
+            return parsed?.mode || null;
+        } catch {
+            return null;
+        }
     }
 
     getModelStatus() {
@@ -48,6 +59,12 @@ class ModelRegistry {
             throw new Error(`Invalid brain mode: ${newMode}. Allowed: RULES_ONLY, SHADOW, ACTIVE`);
         }
         this.mode = newMode;
+        try {
+            fs.mkdirSync(this.modelDir, { recursive: true });
+            fs.writeFileSync(this.modePath, JSON.stringify({ mode: this.mode, updated_at: new Date().toISOString() }));
+        } catch (err) {
+            console.warn("[ModelRegistry] Could not persist brain mode:", err.message);
+        }
         return { success: true, mode: this.mode };
     }
 }

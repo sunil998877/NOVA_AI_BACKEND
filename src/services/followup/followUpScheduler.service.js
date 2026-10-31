@@ -8,6 +8,10 @@ import { LeadEvent } from "../../models/lead-event.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { unifiedDeliveryService } from "../email/unifiedDelivery.service.js";
 import { eventBus } from "../ase/eventBus.service.js";
+import { canAutoDispatch } from "../ase/operatingMode.service.js";
+import { enqueuePendingApproval } from "../ase/approvalQueue.service.js";
+import { isConsentGranted } from "../ase/consent.service.js";
+import { enqueueFollowUpTaskJob } from "../queue/enqueue.js";
 
 class FollowUpSchedulerService {
     constructor() {
@@ -61,20 +65,55 @@ class FollowUpSchedulerService {
         if (!dueTasks || dueTasks.length === 0) return;
 
         for (const task of dueTasks) {
+            const queued = await enqueueFollowUpTaskJob(task);
+            if (queued) {
+                await eventBus.publish("FOLLOWUP_SCHEDULED", {
+                    organization_id: Number(task.organization_id || 1),
+                    lead_id: task.lead_id || null,
+                    channel: "EMAIL",
+                    status: "QUEUED",
+                    payload: { taskId: task.id, queueJobId: queued.id },
+                }).catch(() => {});
+                continue;
+            }
+            await this.processTask(task);
+        }
+    }
+
+    async processTask(task) {
             const orgId = Number(task.organization_id || 1);
+            const dispatchGate = await canAutoDispatch("EMAIL", { organizationId: orgId });
+            if (!dispatchGate.allowed) {
+                if (dispatchGate.enqueue && task.lead_id) {
+                    await enqueuePendingApproval({
+                        organizationId: orgId,
+                        leadId: task.lead_id,
+                        action: "EMAIL",
+                        payload: { source: "follow_up", taskId: task.id },
+                    }).catch(() => {});
+                }
+                return;
+            }
 
             const isOrgActive = await FollowUpAutomation.isAutomationActive(orgId);
             if (!isOrgActive) {
-                continue;
+                return;
             }
 
             const sequence = await FollowUpSequence.findById(task.sequence_id, orgId);
             if (sequence && !sequence.is_active) {
-                continue;
+                return;
+            }
+
+            if (task.lead_id) {
+                const heldLead = await Lead.findById(task.lead_id, orgId);
+                if (heldLead?.metadata?.outreach_hold?.held) {
+                    return;
+                }
             }
 
             const claimed = await FollowUpTask.claimForProcessing(task.id, orgId);
-            if (!claimed) continue;
+            if (!claimed) return;
 
             try {
                 const enrollment = await FollowUpEnrollment.findById(task.enrollment_id, orgId);
@@ -98,20 +137,31 @@ class FollowUpSchedulerService {
                             reason: `Enrollment status is ${enrollment?.status || "missing"}`,
                         },
                     });
-                    continue;
+                    return;
                 }
 
                 const lead = await Lead.findById(task.lead_id, orgId);
+                if (lead?.metadata?.outreach_hold?.held) {
+                    await FollowUpTask.updateById(task.id, { status: "SCHEDULED" }, orgId).catch(() => {});
+                    return;
+                }
                 if (!lead || !lead.email || lead.do_not_contact) {
                     await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Lead missing or marked DNC" }, orgId);
                     await FollowUpEnrollment.cancel(enrollment.id, "Lead marked DNC", orgId);
-                    continue;
+                    return;
+                }
+                if (!isConsentGranted(lead.email_consent)) {
+                    if (lead.email_consent?.status === "DENIED") {
+                        await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Email consent denied" }, orgId);
+                        await FollowUpEnrollment.cancel(enrollment.id, "Email consent denied", orgId);
+                    }
+                    return;
                 }
 
-                if (lead.status === "MEETING_BOOKED" || lead.status === "CALLBACK") {
+                if (["MEETING_BOOKED", "CALLBACK", "CALLBACK_SCHEDULED", "INTERESTED", "HANDED_OFF", "WARM_TRANSFER"].includes(lead.status)) {
                     await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Meeting already booked" }, orgId);
                     await FollowUpEnrollment.markMeetingBooked(enrollment.id, orgId);
-                    continue;
+                    return;
                 }
 
                 const replyRows = await query(
@@ -140,7 +190,7 @@ class FollowUpSchedulerService {
                             reason: "Prospect reply recorded prior to dispatch",
                         },
                     });
-                    continue;
+                    return;
                 }
 
                 const domain = lead.email.split("@")[1] || null;
@@ -148,12 +198,12 @@ class FollowUpSchedulerService {
                 if (suppressed) {
                     await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Suppression match" }, orgId);
                     await FollowUpEnrollment.cancel(enrollment.id, "Lead on suppression list", orgId);
-                    continue;
+                    return;
                 }
 
                 const recheckTask = await FollowUpTask.findById(task.id, orgId);
                 if (!recheckTask || recheckTask.status !== "PROCESSING") {
-                    continue;
+                    return;
                 }
 
                 const recheckEnrollment = await FollowUpEnrollment.findById(enrollment.id, orgId);
@@ -162,7 +212,7 @@ class FollowUpSchedulerService {
                         status: recheckEnrollment?.status === "paused_reply_received" ? "BLOCKED_REPLY" : "CANCELLED",
                         last_error: `Enrollment transitioned to ${recheckEnrollment?.status} before dispatch`,
                     }, orgId);
-                    continue;
+                    return;
                 }
 
                 const headers = {};
@@ -262,7 +312,6 @@ class FollowUpSchedulerService {
                     last_error: taskErr.message,
                 }, orgId);
             }
-        }
     }
 }
 

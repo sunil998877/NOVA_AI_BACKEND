@@ -16,6 +16,177 @@ export const ASE_OUTCOMES = Object.freeze({
     AMBIGUOUS: "OUTCOME_AMBIGUOUS",
 });
 
+const TECHNICAL_NON_CONNECT_OUTCOMES = new Set([
+    ASE_OUTCOMES.NO_ANSWER,
+    ASE_OUTCOMES.RING_TIMEOUT,
+    ASE_OUTCOMES.BUSY,
+    ASE_OUTCOMES.FAILED,
+    ASE_OUTCOMES.CANCELED,
+    ASE_OUTCOMES.REJECTED,
+    ASE_OUTCOMES.VOICEMAIL,
+]);
+
+const BOT_PROMPT_RE = /\b(?:would you like|do you (?:want|have)|is now a good time|can i (?:tell|share|schedule|book)|let me (?:tell|share|schedule|walk)|if you(?:'re| are) interested|are you interested|anyone interested)\b[^.?!\n]*/gi;
+const SPEAKER_PROSPECT_RE = /(?:^|\n)\s*(?:prospect|customer|callee|user|human|lead)\s*[:\-]\s*(.+)/gi;
+const SPEAKER_AGENT_RE = /(?:^|\n)\s*(?:agent|bot|assistant|nova|ai|rep|system)\s*[:\-]\s*.+/gi;
+
+function isolateProspectSpeech(raw = "") {
+    const text = String(raw || "");
+    const prospectTurns = [];
+    const speakerProspect = new RegExp(SPEAKER_PROSPECT_RE.source, "gi");
+    let match;
+    while ((match = speakerProspect.exec(text))) {
+        prospectTurns.push(match[1]);
+    }
+    if (prospectTurns.length) {
+        return prospectTurns.join(" ").replace(/\s+/g, " ").trim();
+    }
+
+    return text
+        .replace(new RegExp(SPEAKER_AGENT_RE.source, "gi"), " ")
+        .replace(new RegExp(BOT_PROMPT_RE.source, "gi"), " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function mapExplicitDisposition(value = "") {
+    const text = String(value || "").toLowerCase();
+    if (!text) return null;
+    if (/\b(dnc|do[_ ]?not[_ ]?call|unsubscribe)\b/.test(text)) {
+        return { outcome: ASE_OUTCOMES.DNC, disposition: "do_not_call" };
+    }
+    if (/\b(not[_ ]?interested|unqualified)\b/.test(text)) {
+        return { outcome: ASE_OUTCOMES.NOT_INTERESTED, disposition: "not_interested" };
+    }
+    if (/\b(callback|call[_ ]?back|follow[_ ]?up)\b/.test(text)) {
+        return { outcome: ASE_OUTCOMES.CALLBACK, disposition: "callback_requested" };
+    }
+    if (/\b(interested|qualified|hot)\b/.test(text)) {
+        return { outcome: ASE_OUTCOMES.INTERESTED, disposition: "interested" };
+    }
+    if (/\b(voicemail|machine)\b/.test(text)) {
+        return { outcome: ASE_OUTCOMES.VOICEMAIL, disposition: "voicemail_detected" };
+    }
+    return null;
+}
+
+export function extractCallTranscript(raw = {}) {
+    const buckets = [raw];
+    if (raw && typeof raw === "object") {
+        for (const key of ["variables", "data", "result", "payload", "call"]) {
+            if (raw[key] && typeof raw[key] === "object") buckets.push(raw[key]);
+        }
+    }
+    for (const obj of buckets) {
+        for (const key of ["SpeechResult", "transcript", "conversation", "summary", "Text", "text", "call_transcript", "dialogue"]) {
+            const val = obj?.[key];
+            if (typeof val === "string" && val.trim()) return val.trim();
+            if (Array.isArray(val)) {
+                const joined = val
+                    .map((turn) => (typeof turn === "string" ? turn : turn?.text || turn?.content || turn?.message || ""))
+                    .filter(Boolean)
+                    .join(" ");
+                if (joined.trim()) return joined.trim();
+            }
+        }
+    }
+    return "";
+}
+
+export function classifyProspectSpeech(raw = "") {
+    const original = String(raw || "").toLowerCase().trim();
+    const prospectText = isolateProspectSpeech(raw).toLowerCase();
+    const scan = prospectText || original;
+
+    const emptyResult = {
+        outcome: ASE_OUTCOMES.AMBIGUOUS,
+        disposition: original ? "bot_prompt_only" : "connected_unspecified",
+        isDnc: false,
+        callbackRequested: false,
+        interested: false,
+    };
+
+    if (!original) return emptyResult;
+
+    if (
+        /\b(do not call|don't call|stop calling|remove me|unsubscribe|do not contact|don't contact|dont contact)\b/.test(scan)
+    ) {
+        return {
+            outcome: ASE_OUTCOMES.DNC,
+            disposition: "do_not_call",
+            isDnc: true,
+            callbackRequested: false,
+            interested: false,
+        };
+    }
+
+    if (/\b(not interested|no thank you|no thanks|not looking)\b/.test(scan)) {
+        return {
+            outcome: ASE_OUTCOMES.NOT_INTERESTED,
+            disposition: "not_interested",
+            isDnc: false,
+            callbackRequested: false,
+            interested: false,
+        };
+    }
+
+    if (!prospectText) return emptyResult;
+
+    if (
+        /\b(call me back|call (me )?(tomorrow|later)|give me a callback|please callback|bad time|not a good time|busy right now)\b/.test(prospectText)
+    ) {
+        return {
+            outcome: ASE_OUTCOMES.CALLBACK,
+            disposition: "callback_requested",
+            isDnc: false,
+            callbackRequested: true,
+            interested: false,
+        };
+    }
+
+    const firstPersonInterest = /\b(i(?:'m| am) interested|we(?:'re| are) interested|sounds good|tell me more|send (?:me )?details|book a (?:call|demo|meeting)|let'?s (?:talk|connect|book|schedule)|yes[, ]+i (?:am|would)|i(?:'d| would) like to (?:schedule|book|set up))\b/;
+    const affirmativeMeeting = /\b(yes|yeah|yep|sure|please|i want|let'?s|book|set up|setup)\b[\s\S]{0,60}\b(demo|meeting|schedule)\b/;
+
+    if (firstPersonInterest.test(prospectText) || affirmativeMeeting.test(prospectText)) {
+        return {
+            outcome: ASE_OUTCOMES.INTERESTED,
+            disposition: "interested",
+            isDnc: false,
+            callbackRequested: false,
+            interested: true,
+        };
+    }
+
+    return {
+        outcome: ASE_OUTCOMES.AMBIGUOUS,
+        disposition: "unclassified",
+        isDnc: false,
+        callbackRequested: false,
+        interested: false,
+    };
+}
+
+export function isTechnicalNonConnectOutcome(outcome) {
+    return TECHNICAL_NON_CONNECT_OUTCOMES.has(outcome);
+}
+
+export function shouldQueueHumanHandoff(outcome, rawData = {}) {
+    if (outcome !== ASE_OUTCOMES.INTERESTED && outcome !== ASE_OUTCOMES.CALLBACK) {
+        return false;
+    }
+    if (rawData.isAnswered === false || rawData.answered === false) {
+        return false;
+    }
+    if (isTechnicalNonConnectOutcome(outcome)) {
+        return false;
+    }
+    const status = String(rawData.callStatus || rawData.CallStatus || rawData.status || "").toLowerCase();
+    if (["busy", "no-answer", "no_answer", "timeout", "failed", "canceled", "cancelled", "rejected"].includes(status)) {
+        return false;
+    }
+    return true;
+}
+
 export const TELEPHONY_TECHNICAL_STATUS = Object.freeze({
     INITIATED: "INITIATED",
     QUEUED: "QUEUED",
@@ -52,12 +223,15 @@ export function normalizeTelephonyOutcome(raw = {}) {
         };
     }
 
-    const providerStatus = String(raw.CallStatus || raw.call_status || raw.Status || raw.status || raw.call_state || "").toLowerCase().trim();
-    const hangupCause = String(raw.HangupCause || raw.hangup_cause || raw.hangup_cause_name || "").toLowerCase().trim();
+    let providerStatus = String(raw.CallStatus || raw.call_status || raw.Status || raw.status || raw.call_state || "").toLowerCase().trim();
+    const hangupCause = String(raw.HangupCause || raw.hangup_cause || raw.hangup_cause_name || raw.disposition || raw.call_disposition || "").toLowerCase().trim();
     const duration = Number(raw.Duration || raw.call_duration || raw.duration_sec || raw.CallDuration || 0);
     const billDuration = Number(raw.BillDuration || raw.billed_duration || raw.billable_duration_sec || 0);
     const hasAnswerTime = Boolean(raw.AnswerTime || raw.answer_time);
-    const speechResult = String(raw.SpeechResult || raw.transcript || raw.Text || raw.text || "").toLowerCase().trim();
+    const speechResult = extractCallTranscript(raw).toLowerCase();
+    if (!providerStatus && (speechResult || hangupCause || raw.lead_id || raw.leadId)) {
+        providerStatus = "completed";
+    }
     const isExplicitAnswerWebhook = Boolean(raw.isAnswerWebhook);
     const providerCost = raw.TotalCost != null ? Number(raw.TotalCost) : (raw.cost != null ? Number(raw.cost) : null);
     const answeredAt = raw.AnswerTime || raw.answer_time || null;
@@ -170,12 +344,15 @@ export function normalizeTelephonyOutcome(raw = {}) {
         return buildResult(TELEPHONY_TECHNICAL_STATUS.INITIATED, ASE_OUTCOMES.AMBIGUOUS, false, "initiated", "Outbound call request accepted", "INITIATED");
     }
 
+    const explicitDisposition = String(raw.disposition || raw.call_disposition || raw.intent || "").toLowerCase().trim();
+    const mappedExplicit = mapExplicitDisposition(explicitDisposition);
+
     const isConfirmedAnswer = Boolean(
         isExplicitAnswerWebhook ||
         providerStatus === "in-progress" ||
         providerStatus === "answer" ||
         providerStatus === "answered" ||
-        (providerStatus === "completed" && (hasAnswerTime || billDuration > 0 || duration > 0))
+        (providerStatus === "completed" && (hasAnswerTime || billDuration > 0 || duration > 0 || Boolean(speechResult)))
     );
 
     if (isConfirmedAnswer) {
@@ -183,44 +360,16 @@ export function normalizeTelephonyOutcome(raw = {}) {
         let outcome = ASE_OUTCOMES.AMBIGUOUS;
 
         if (speechResult) {
-            if (
-                speechResult.includes("do not call") ||
-                speechResult.includes("stop calling") ||
-                speechResult.includes("remove me") ||
-                speechResult.includes("don't call")
-            ) {
-                outcome = ASE_OUTCOMES.DNC;
-                disposition = "do_not_call";
-            } else if (
-                speechResult.includes("call me back") ||
-                speechResult.includes("call tomorrow") ||
-                speechResult.includes("call later") ||
-                speechResult.includes("bad time") ||
-                speechResult.includes("callback")
-            ) {
-                outcome = ASE_OUTCOMES.CALLBACK;
-                disposition = "callback_requested";
-            } else if (
-                speechResult.includes("not interested") ||
-                speechResult.includes("no thank you") ||
-                speechResult.includes("not looking")
-            ) {
-                outcome = ASE_OUTCOMES.NOT_INTERESTED;
-                disposition = "not_interested";
-            } else if (
-                speechResult.includes("interested") ||
-                speechResult.includes("sounds good") ||
-                speechResult.includes("tell me more") ||
-                speechResult.includes("send details") ||
-                speechResult.includes("demo") ||
-                speechResult.includes("schedule")
-            ) {
-                outcome = ASE_OUTCOMES.INTERESTED;
-                disposition = "interested";
-            } else {
-                disposition = "connected_conversation";
-                outcome = ASE_OUTCOMES.AMBIGUOUS;
-            }
+            const classified = classifyProspectSpeech(speechResult);
+            outcome = classified.outcome;
+            disposition = classified.outcome === ASE_OUTCOMES.AMBIGUOUS
+                ? "connected_conversation"
+                : classified.disposition;
+        }
+
+        if (mappedExplicit && (outcome === ASE_OUTCOMES.AMBIGUOUS || !speechResult)) {
+            outcome = mappedExplicit.outcome;
+            disposition = mappedExplicit.disposition;
         }
 
         const techStatus = providerStatus === "completed"
@@ -245,8 +394,18 @@ export function normalizeChannelOutcome(channel, rawResponse = {}) {
     if (!rawResponse) return ASE_OUTCOMES.AMBIGUOUS;
 
     if (channel === "VOICE") {
-        const normalized = normalizeTelephonyOutcome(rawResponse);
-        return normalized.normalizedOutcome;
+        const hasProviderStatus = Boolean(
+            rawResponse.CallStatus ||
+            rawResponse.call_status ||
+            rawResponse.Status ||
+            rawResponse.status ||
+            rawResponse.call_state ||
+            rawResponse.HangupCause ||
+            rawResponse.hangup_cause
+        );
+        if (hasProviderStatus) {
+            return normalizeTelephonyOutcome(rawResponse).normalizedOutcome;
+        }
     }
 
     const intent = String(rawResponse.detectedIntent || rawResponse.intent || "").toLowerCase();
@@ -292,12 +451,12 @@ export function normalizeChannelOutcome(channel, rawResponse = {}) {
         return ASE_OUTCOMES.DNC;
     }
 
+    const classified = classifyProspectSpeech(`${subject} ${text}`.trim());
+
     if (
         intent.includes("callback") ||
         disposition.includes("callback") ||
-        text.includes("call me back") ||
-        text.includes("call later") ||
-        text.includes("tomorrow")
+        classified.outcome === ASE_OUTCOMES.CALLBACK
     ) {
         return ASE_OUTCOMES.CALLBACK;
     }
@@ -305,11 +464,7 @@ export function normalizeChannelOutcome(channel, rawResponse = {}) {
     if (
         intent.includes("not_interested") ||
         disposition.includes("not_interested") ||
-        text.includes("not interested") ||
-        text.includes("not_interested") ||
-        text.includes("no thanks") ||
-        text.includes("don't contact") ||
-        text.includes("dont contact")
+        classified.outcome === ASE_OUTCOMES.NOT_INTERESTED
     ) {
         return ASE_OUTCOMES.NOT_INTERESTED;
     }
@@ -317,16 +472,7 @@ export function normalizeChannelOutcome(channel, rawResponse = {}) {
     if (
         intent.includes("interested") ||
         disposition.includes("interested") ||
-        text.includes("interested") ||
-        text.includes("i'm interested") ||
-        text.includes("i am interested") ||
-        text.includes("yes, i am") ||
-        text.includes("sounds good") ||
-        text.includes("tell me more") ||
-        text.includes("send details") ||
-        text.includes("let's talk") ||
-        text.includes("let's connect") ||
-        text.includes("book a call")
+        classified.outcome === ASE_OUTCOMES.INTERESTED
     ) {
         return ASE_OUTCOMES.INTERESTED;
     }

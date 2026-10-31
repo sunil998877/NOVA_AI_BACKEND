@@ -1,7 +1,8 @@
-import { researchCompany } from "../ase/companyResearch.service.js";
+import { isUsableResearchProfile, researchCompany } from "../ase/companyResearch.service.js";
 import { storeOutreachDraft } from "../ase/leadEmailDrafter.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
+import { enqueueCompanyResearchJob } from "../queue/enqueue.js";
 
 const LIMIT = 3;
 const pending = [];
@@ -24,15 +25,15 @@ async function kickScheduler() {
     aseScheduler.kick();
 }
 
-export async function researchLeadCompany(lead) {
+export async function researchLeadCompany(lead, options = {}) {
     if (!lead?.id) return null;
     const orgId = Number(lead.organization_id || 1);
     const fresh = await Lead.findById(lead.id, orgId);
     if (!fresh || fresh.do_not_contact) return null;
 
     const existing = readMetadata(fresh);
-    if (existing.company_research?.summary || existing.company_research?.qualityStatus) {
-        if (!existing.outreach_email?.subject) {
+    if (isUsableResearchProfile(existing.company_research)) {
+        if (!options.skipDraft && !existing.outreach_email?.subject) {
             await storeOutreachDraft(fresh, existing.company_research);
         } else if (existing.company_research_status === "pending") {
             await Lead.updateById(
@@ -55,18 +56,19 @@ export async function researchLeadCompany(lead) {
 
     const latest = await Lead.findById(fresh.id, orgId);
     const latestMeta = readMetadata(latest || fresh);
+    const usable = isUsableResearchProfile(research);
     const metadata = {
         ...latestMeta,
-        company_research: research || latestMeta.company_research || null,
-        company_research_status: (research?.summary || research?.qualityStatus) ? "ready" : "failed",
+        company_research: usable ? research : (latestMeta.company_research || research || null),
+        company_research_status: usable ? "ready" : "pending",
     };
 
     const researched = await Lead.updateById(fresh.id, { metadata }, orgId);
-    if (research?.summary || research?.qualityStatus || latestMeta.company_research?.summary || latestMeta.company_research?.qualityStatus) {
-        await storeOutreachDraft(researched || { ...fresh, metadata }, research || latestMeta.company_research);
+    if (usable && !options.skipDraft) {
+        await storeOutreachDraft(researched || { ...fresh, metadata }, research);
     }
 
-    if (research?.summary || research?.qualityStatus) {
+    if (usable) {
         await LeadEvent.create({
             organization_id: orgId,
             lead_id: fresh.id,
@@ -108,6 +110,14 @@ function drain() {
 export function enqueueLeadCompanyResearch(lead) {
     if (process.env.ASE_SKIP_OUTREACH === "1") return;
     if (!lead?.id) return;
-    pending.push(lead);
-    drain();
+    enqueueCompanyResearchJob(lead)
+        .then((queued) => {
+            if (queued) return;
+            pending.push(lead);
+            drain();
+        })
+        .catch(() => {
+            pending.push(lead);
+            drain();
+        });
 }

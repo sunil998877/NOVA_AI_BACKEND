@@ -11,6 +11,7 @@ import { normalizeChannelOutcome, ASE_OUTCOMES } from "./outcomeNormalizer.servi
 import { classifyInteractionIntent } from "./brain/intentClassification.service.js";
 import { getIo } from "../../socket/socketServer.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
+import { haltOutreachForLead } from "./outreachHalt.service.js";
 
 function extractCleanReply(text) {
     if (!text) return "";
@@ -319,6 +320,7 @@ class EmailReplyListenerService {
         const cleanFrom = extractEmailAddress(from);
         if (!cleanFrom) return null;
 
+        const mailboxOrgId = Number(process.env.IMAP_ORGANIZATION_ID || env.imap?.organizationId || 0) || null;
         const match = await followUpEngine.matchIncomingReply({
             from: cleanFrom,
             to,
@@ -326,12 +328,16 @@ class EmailReplyListenerService {
             messageId,
             inReplyTo,
             references,
+            orgId: mailboxOrgId,
         });
 
         if (match.ambiguous) {
+            const ambOrg = Number(match.organization_id || mailboxOrgId || 0);
+            const ambLead = match.candidateIds?.[0];
+            if (!ambOrg || !ambLead) return { processed: true, ambiguous: true };
             await LeadEvent.create({
-                organization_id: 1,
-                lead_id: match.candidateIds?.[0] || 1,
+                organization_id: ambOrg,
+                lead_id: ambLead,
                 channel: "EMAIL",
                 event_type: "REPLY_MATCH_AMBIGUOUS",
                 status: "REVIEW_REQUIRED",
@@ -348,18 +354,14 @@ class EmailReplyListenerService {
         }
 
         let lead = match.lead;
-        if (!lead) {
-            const leads = await query(
-                `SELECT * FROM leads WHERE LOWER(email) = ? ORDER BY id DESC LIMIT 1`,
-                [cleanFrom]
-            );
-            if (leads && leads.length > 0) {
-                lead = leads[0];
-            }
+        if (!lead && mailboxOrgId) {
+            lead = await Lead.findByEmail(mailboxOrgId, cleanFrom);
         }
 
         if (!lead) return null;
-        const orgId = Number(lead.organization_id || 1);
+        const orgId = Number(lead.organization_id || mailboxOrgId);
+        if (!orgId) return null;
+        lead = await Lead.findById(lead.id, orgId) || lead;
 
         const classification = classifyInteractionIntent(body, { channel: "EMAIL", subject });
         const outcome = classification.intent === "unsubscribe_or_dnc"
@@ -403,7 +405,7 @@ class EmailReplyListenerService {
         }
 
         if (outcome === ASE_OUTCOMES.DNC) {
-            await followUpEngine.handleSuppression(lead.id, orgId).catch(() => {});
+            await haltOutreachForLead(orgId, lead.id, "Prospect requested DNC by email reply").catch(() => {});
         }
 
         const currentScore = Number(lead.priority || 50);
@@ -442,7 +444,7 @@ class EmailReplyListenerService {
 
         const io = getIo();
         if (io) {
-            io.emit("lead:reply_received", {
+            io.to(`org:${orgId}`).emit("lead:reply_received", {
                 leadId: lead.id,
                 email: lead.email,
                 name: lead.name,
@@ -451,7 +453,7 @@ class EmailReplyListenerService {
                 subject,
                 matchedBy: match.matchedBy,
             });
-            io.emit("lead:updated", { id: lead.id });
+            io.to(`org:${orgId}`).emit("lead:updated", { id: lead.id });
         }
 
         return {

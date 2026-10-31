@@ -94,6 +94,18 @@ export const Call = {
         return rows[0] ? mapCall(rows[0]) : null;
     },
 
+    async findByIdAnyOrg(id) {
+        const rows = await query(
+            `SELECT c.*, l.name as lead_name, l.email as lead_email, l.company as lead_company,
+                    l.priority as lead_priority, l.status as lead_status, l.phone as lead_phone
+             FROM ${table} c
+             LEFT JOIN leads l ON c.lead_id = l.id
+             WHERE c.id = ? LIMIT 1`,
+            [Number(id)]
+        );
+        return rows[0] ? mapCall(rows[0]) : null;
+    },
+
     async findByProviderUuid(arg1, arg2) {
         const orgId = arg2 !== undefined ? Number(arg1) : 1;
         const providerCallUuid = arg2 !== undefined ? String(arg2) : String(arg1);
@@ -111,6 +123,19 @@ export const Call = {
 
     async findByProviderCallUuid(arg1, arg2) {
         return this.findByProviderUuid(arg1, arg2);
+    },
+
+    async findByProviderUuidAnyOrg(providerCallUuid) {
+        if (!providerCallUuid) return null;
+        const rows = await query(
+            `SELECT c.*, l.name as lead_name, l.email as lead_email, l.company as lead_company,
+                    l.priority as lead_priority, l.status as lead_status, l.phone as lead_phone
+             FROM ${table} c
+             LEFT JOIN leads l ON c.lead_id = l.id
+             WHERE c.provider_call_uuid = ? LIMIT 1`,
+            [String(providerCallUuid)]
+        );
+        return rows[0] ? mapCall(rows[0]) : null;
     },
 
     async updateById(arg1, arg2, arg3) {
@@ -264,5 +289,37 @@ export const Call = {
 
     async getStats(orgId = 1) {
         return this.countStats(orgId);
+    },
+
+    async countActiveOutbound(orgId) {
+        const rows = await query(
+            `SELECT COUNT(*) AS total FROM ${table}
+             WHERE organization_id = ?
+               AND completed_at IS NULL
+               AND provider_status IN ('initiated', 'ringing', 'in-progress', 'queued', 'unknown')`,
+            [Number(orgId || 1)]
+        );
+        return Number(rows?.[0]?.total || 0);
+    },
+
+    async findOpenForPoll({ olderThanSec = 8, newerThanHours = 8, limit = 20 } = {}) {
+        const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 50);
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE completed_at IS NULL
+               AND provider_status IN ('initiated', 'ringing', 'in-progress', 'queued', 'unknown')
+               AND provider_call_uuid IS NOT NULL
+               AND provider_call_uuid NOT LIKE 'plivo_sim_%'
+               AND provider_call_uuid NOT LIKE 'sim_%'
+               AND provider_call_uuid NOT LIKE 'mock-uuid%'
+               AND provider_call_uuid NOT LIKE 'uuid-order-%'
+               AND phone_number NOT LIKE '%555%'
+               AND created_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+               AND created_at <= DATE_SUB(NOW(), INTERVAL ? SECOND)
+             ORDER BY created_at DESC
+             LIMIT ${safeLimit}`,
+            [Number(newerThanHours), Number(olderThanSec)]
+        );
+        return rows.map(mapCall);
     },
 };

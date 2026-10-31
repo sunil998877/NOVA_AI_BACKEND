@@ -8,6 +8,11 @@ export function registerChatHandlers(io, socket) {
     const user = socket.user;
     if (!user) return;
 
+    const orgId = Number(user.organization_id || 0);
+    if (orgId) {
+        socket.join(`org:${orgId}`);
+    }
+
     const isFirstConnection = presence.add(user.id, socket.id);
     if (user.collabId) {
         presence.add(String(user.collabId), socket.id);
@@ -18,7 +23,8 @@ export function registerChatHandlers(io, socket) {
     }
 
     if (isFirstConnection) {
-        socket.broadcast.emit("user:online", { userId: user.id, role: user.role });
+        const onlineTarget = orgId ? socket.to(`org:${orgId}`) : socket.broadcast;
+        onlineTarget.emit("user:online", { userId: user.id, role: user.role });
         if (user.collabId) {
             socket.broadcast.emit("user:online", { userId: String(user.collabId), role: user.role });
             socket.broadcast.emit("user:online", { userId: `inf-${user.collabId}`, role: user.role });

@@ -16,6 +16,7 @@ export function buildDecisionPayload(features, eligibility) {
         recent_click: signals.recentClick,
         high_intent: signals.highIntent,
         fatigue: signals.fatigue,
+        status: features.status || null,
         candidate_actions: eligibility.candidateActions || [],
     };
 }

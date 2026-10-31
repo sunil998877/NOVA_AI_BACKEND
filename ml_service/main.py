@@ -7,6 +7,7 @@ import onnxruntime as ort
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ml_service.features import ACTIONS, FEATURE_NAMES, FEATURE_SCHEMA_VERSION, ROOT, scale_vector
@@ -92,6 +93,16 @@ def health():
     }
 
 
+@app.get("/")
+def root():
+    return health()
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)
+
+
 @app.get("/schema")
 def schema():
     return {
@@ -128,9 +139,10 @@ def decide(body: DecideRequest):
     channel = "EMAIL" if action == "EMAIL" else ("VOICE" if action == "CALL" else None)
 
     delay = float(delay_model.predict(vector)[0])
-    delay_hours = int(np.clip(np.rint(delay), 0, 72))
+    delay_hours = float(np.clip(delay, 0, 72))
     if action is None:
-        delay_hours = max(delay_hours, 4)
+        delay_hours = max(delay_hours, 4.0)
+    delay_hours = round(delay_hours, 2)
 
     conversion = float(conversion_model.predict_proba(vector)[0, 1])
     conversion = float(min(0.95, max(0.02, conversion)))

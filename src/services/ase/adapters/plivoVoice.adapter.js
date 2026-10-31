@@ -1,7 +1,8 @@
 import { BaseChannelAdapter } from "./base.adapter.js";
-import { ASE_OUTCOMES } from "../outcomeNormalizer.service.js";
+import { classifyProspectSpeech } from "../outcomeNormalizer.service.js";
 import { env } from "../../../config/env.js";
 import { tryPlaybookVoice } from "../salesPlaybook.service.js";
+import { resolvePublicBaseUrl } from "../../../utils/publicBaseUrl.js";
 
 export class PlivoVoiceAdapter extends BaseChannelAdapter {
     constructor() {
@@ -13,6 +14,45 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         const authToken = process.env.PLIVO_AUTH_TOKEN || process.env.PLIVO_AGENT_AUTH_TOKEN;
         const fromNumber = process.env.PLIVO_PHONE_NUMBER;
         return Boolean(authId && authToken && fromNumber);
+    }
+
+    getAccountAuth() {
+        const authId = process.env.PLIVO_AUTH_ID || process.env.PLIVO_AGENT_AUTH_ID;
+        const authToken = process.env.PLIVO_AUTH_TOKEN || process.env.PLIVO_AGENT_AUTH_TOKEN;
+        if (!authId || !authToken) return null;
+        return {
+            authId,
+            header: `Basic ${Buffer.from(`${authId}:${authToken}`).toString("base64")}`,
+        };
+    }
+
+    async fetchCallDetails(callUuid) {
+        const auth = this.getAccountAuth();
+        if (!auth || !callUuid) return null;
+        const url = `https://api.plivo.com/v1/Account/${auth.authId}/Call/${encodeURIComponent(callUuid)}/`;
+        const response = await fetch(url, {
+            headers: { Authorization: auth.header },
+            signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) return null;
+        return response.json().catch(() => null);
+    }
+
+    async listRecentCalls({ to, limit = 20 } = {}) {
+        const auth = this.getAccountAuth();
+        if (!auth) return [];
+        const qs = new URLSearchParams({ limit: String(Math.min(Number(limit) || 20, 50)) });
+        const url = `https://api.plivo.com/v1/Account/${auth.authId}/Call/?${qs}`;
+        const response = await fetch(url, {
+            headers: { Authorization: auth.header },
+            signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) return [];
+        const data = await response.json().catch(() => ({}));
+        const objects = Array.isArray(data.objects) ? data.objects : [];
+        if (!to) return objects;
+        const needle = String(to).replace(/\D/g, "").slice(-10);
+        return objects.filter((row) => String(row.to || row.to_number || "").replace(/\D/g, "").slice(-10) === needle);
     }
 
     getMissingConfiguration() {
@@ -75,10 +115,13 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         if (lead.id) qParams.set("leadId", String(lead.id));
         if (lead.organization_id) qParams.set("orgId", String(lead.organization_id));
         if (payload.callId) qParams.set("callId", String(payload.callId));
+        const webhookToken = process.env.VOICE_WEBHOOK_SECRET || "";
+        if (webhookToken) qParams.set("token", webhookToken);
 
         const qs = qParams.toString() ? `?${qParams.toString()}` : "";
         const answerUrl = payload.answerUrl || `${effectiveBaseUrl}/api/engine/voice/plivo/answer${qs}`;
         const callbackUrl = payload.callbackUrl || `${effectiveBaseUrl}/api/engine/voice/plivo/status${qs}`;
+        const agentflowResultUrl = payload.agentflowResultUrl || `${effectiveBaseUrl}/api/engine/voice/plivo/agentflow${qs}`;
 
         if (!this.isConfigured()) {
             if (payload.requireRealProvider) {
@@ -114,9 +157,50 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         const authId = process.env.PLIVO_AUTH_ID || process.env.PLIVO_AGENT_AUTH_ID;
         const authToken = process.env.PLIVO_AUTH_TOKEN || process.env.PLIVO_AGENT_AUTH_TOKEN;
         const basicAuth = Buffer.from(`${authId}:${authToken}`).toString("base64");
-        const agentflowUrl = (process.env.PLIVO_AGENT_API_URL || "").trim();
+        const agentflowUrl = (process.env.PLIVO_AGENT_API_URL || process.env.CALLING_BOT_API_URL || "").trim();
+        const flowId = agentflowUrl.match(/\/flow\/([^/?#]+)/i)?.[1] || null;
 
         if (agentflowUrl) {
+            const agentPayload = {
+                to,
+                from,
+                name: lead.name || "",
+                company: lead.company || research?.company || "",
+                lead_name: lead.name || "",
+                company_name: lead.company || research?.company || "",
+                leadName: lead.name || "",
+                companyName: lead.company || research?.company || "",
+                email: lead.email || "",
+                phone: to,
+                lead_id: String(lead.id || ""),
+                organization_id: String(lead.organization_id || ""),
+                opening_line: openingLine,
+                callback_url: agentflowResultUrl,
+                result_url: agentflowResultUrl,
+                hangup_url: callbackUrl,
+                status_callback_url: callbackUrl,
+                variables: {
+                    to,
+                    from,
+                    name: lead.name || "",
+                    company: lead.company || research?.company || "",
+                    lead_name: lead.name || "",
+                    company_name: lead.company || research?.company || "",
+                    company_summary: research?.summary || "",
+                    industry: research?.industry || "",
+                    opening_line: openingLine,
+                    email: lead.email || "",
+                    phone: to,
+                    lead_id: String(lead.id || ""),
+                    organization_id: String(lead.organization_id || ""),
+                    callback_url: agentflowResultUrl,
+                    result_url: agentflowResultUrl,
+                    hangup_url: callbackUrl,
+                    status_callback_url: callbackUrl,
+                    ...(playbookVoice?.variables || {}),
+                },
+            };
+
             try {
                 const agentResponse = await fetch(agentflowUrl, {
                     method: "POST",
@@ -124,61 +208,52 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
                         Authorization: `Basic ${basicAuth}`,
                         "Content-Type": "application/json",
                     },
-                    body: JSON.stringify({
-                        to,
-                        from,
-                        lead_name: lead.name || "",
-                        company_name: lead.company || research?.company || "",
-                        leadName: lead.name || "",
-                        companyName: lead.company || research?.company || "",
-                        name: lead.name || "",
-                        company: lead.company || research?.company || "",
-                        variables: {
-                            lead_name: lead.name || "",
-                            company_name: lead.company || research?.company || "",
-                            leadName: lead.name || "",
-                            companyName: lead.company || research?.company || "",
-                            name: lead.name || "",
-                            company: lead.company || research?.company || "",
-                            company_summary: research?.summary || "",
-                            industry: research?.industry || "",
-                            opening_line: openingLine,
-                            email: lead.email || "",
-                            phone: to,
-                            lead_id: String(lead.id || ""),
-                            organization_id: String(lead.organization_id || "1"),
-                            ...(playbookVoice?.variables || {}),
-                        },
-                        parameters: {
-                            lead_name: lead.name || "",
-                            company_name: lead.company || research?.company || "",
-                            leadName: lead.name || "",
-                            companyName: lead.company || research?.company || "",
-                            name: lead.name || "",
-                            company: lead.company || research?.company || "",
-                            company_summary: research?.summary || "",
-                            opening_line: openingLine,
-                        },
-                    }),
+                    body: JSON.stringify(agentPayload),
+                    signal: AbortSignal.timeout(15000),
                 });
 
                 const agentData = await agentResponse.json().catch(() => ({}));
-                if (agentResponse.ok) {
-                    const resolvedUuid = agentData.request_uuid || agentData.api_id || agentData.phlo_id || `agent_${Date.now()}`;
+                if (!agentResponse.ok) {
+                    const error = agentData.message || agentData.error || agentData.detail
+                        || `Agentflow returned ${agentResponse.status}`;
+                    console.error(`[ASE][Plivo] Agentflow trigger failed (${agentResponse.status}): ${error}`);
                     return {
                         channel: "VOICE",
-                        status: "SUCCEEDED",
+                        status: "FAILED",
+                        error: `Plivo Agentflow failed: ${error}`,
                         rawResponse: agentData,
-                        metadata: {
-                            callId: resolvedUuid,
-                            providerCallId: resolvedUuid,
-                            phone: to,
-                            provider: "plivo_agentflow",
-                            flowId: agentData.phlo_id || "2c0b21ef-0183-4e77-99be-bc86ef57a36e",
-                        },
                     };
                 }
-            } catch (_) {}
+
+                const resolvedUuid = agentData.request_uuid
+                    || agentData.call_uuid
+                    || agentData.CallUUID
+                    || agentData.api_id
+                    || agentData.phlo_id
+                    || agentData.id
+                    || `agentflow_${Date.now()}`;
+                console.log(`[ASE][Plivo] Agentflow triggered flow=${flowId || "configured"} uuid=${resolvedUuid}`);
+                return {
+                    channel: "VOICE",
+                    status: "SUCCEEDED",
+                    rawResponse: agentData,
+                    metadata: {
+                        callId: resolvedUuid,
+                        providerCallId: resolvedUuid,
+                        phone: to,
+                        provider: "plivo_agentflow",
+                        flowId,
+                    },
+                };
+            } catch (error) {
+                console.error(`[ASE][Plivo] Agentflow request error: ${error.message}`);
+                return {
+                    channel: "VOICE",
+                    status: "FAILED",
+                    error: `Plivo Agentflow request failed: ${error.message}`,
+                    rawResponse: null,
+                };
+            }
         }
 
         const plivoUrl = `https://api.plivo.com/v1/Account/${authId}/Call/`;
@@ -251,103 +326,117 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         return `Hello ${firstName}, this is Nova from Evoke AI. I was looking at ${company}. ${about}. Do you have thirty seconds?`;
     }
 
-    generateAnswerXml({ message, leadName = "there", lead } = {}) {
-        const speechText = message || this.buildCallSpeech(lead || { name: leadName });
-        const safeText = String(speechText)
+    escapeXml(value = "") {
+        return String(value)
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&apos;");
+    }
 
+    generateAnswerXml({ message, leadName = "there", lead } = {}) {
+        const speechText = message || this.buildCallSpeech(lead || { name: leadName });
         return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Speak voice="Polly.Aditi" language="en-IN">${safeText}</Speak>
+    <Speak voice="Polly.Aditi" language="en-IN">${this.escapeXml(speechText)}</Speak>
 </Response>`;
     }
 
+    generateConferenceXml({ conferenceName, message, endOnExit = false } = {}) {
+        const room = this.escapeXml(conferenceName || "ase-transfer");
+        const speech = message
+            ? `<Speak voice="Polly.Aditi" language="en-IN">${this.escapeXml(message)}</Speak>`
+            : "";
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    ${speech}
+    <Conference startConferenceOnEnter="true" endConferenceOnExit="${endOnExit ? "true" : "false"}" maxMembers="3">${room}</Conference>
+</Response>`;
+    }
+
+    generateCallbackPromiseXml(message) {
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak voice="Polly.Aditi" language="en-IN">${this.escapeXml(message)}</Speak>
+    <Hangup/>
+</Response>`;
+    }
+
+    async plivoPost(path, body) {
+        const auth = this.getAccountAuth();
+        if (!auth) {
+            return { status: "SUCCEEDED", rawResponse: { simulated: true, path, body } };
+        }
+        const url = `https://api.plivo.com/v1/Account/${auth.authId}${path}`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    Authorization: auth.header,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(12000),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return { status: "FAILED", error: data.message || `Plivo ${response.status}`, rawResponse: data };
+            }
+            return { status: "SUCCEEDED", rawResponse: data, metadata: { callId: data.request_uuid || data.api_id } };
+        } catch (error) {
+            return { status: "FAILED", error: error.message, rawResponse: null };
+        }
+    }
+
+    async transferLiveCall(callUuid, answerUrl) {
+        if (!callUuid || !answerUrl) {
+            return { status: "FAILED", error: "callUuid and answerUrl are required" };
+        }
+        if (!this.isConfigured()) {
+            return { status: "FAILED", error: "Plivo is not configured for warm transfer" };
+        }
+        return this.plivoPost(`/Call/${encodeURIComponent(callUuid)}/`, {
+            legs: "aleg",
+            aleg_url: answerUrl,
+            aleg_method: "POST",
+        });
+    }
+
+    async dialIntoConference(to, { answerUrl, hangupUrl, from } = {}) {
+        const dest = String(to || "").trim();
+        if (!dest || !answerUrl) {
+            return { status: "FAILED", error: "rep number and answerUrl are required" };
+        }
+        if (!this.isConfigured()) {
+            return { status: "FAILED", error: "Plivo is not configured for warm transfer" };
+        }
+        return this.plivoPost("/Call/", {
+            from: from || process.env.PLIVO_PHONE_NUMBER,
+            to: dest,
+            answer_url: answerUrl,
+            answer_method: "POST",
+            hangup_url: hangupUrl || undefined,
+            hangup_method: hangupUrl ? "POST" : undefined,
+        });
+    }
+
+    async speakAndHangup(callUuid, message) {
+        if (!callUuid) return { status: "FAILED", error: "callUuid is required" };
+        if (!this.isConfigured()) {
+            return { status: "FAILED", error: "Plivo is not configured for warm transfer" };
+        }
+        const base = await resolvePublicBaseUrl();
+        const params = new URLSearchParams();
+        if (process.env.VOICE_WEBHOOK_SECRET) params.set("token", process.env.VOICE_WEBHOOK_SECRET);
+        params.set("promise", "1");
+        params.set("message", String(message || "").slice(0, 240));
+        const answerUrl = `${base}/api/engine/voice/plivo/transfer/promise?${params.toString()}`;
+        return this.transferLiveCall(callUuid, answerUrl);
+    }
+
     extractConversationOutcome(transcript = "") {
-        const text = String(transcript || "").toLowerCase();
-
-        if (
-            text.includes("do not call") ||
-            text.includes("stop calling") ||
-            text.includes("remove me") ||
-            text.includes("don't call")
-        ) {
-            return {
-                outcome: ASE_OUTCOMES.DNC,
-                disposition: "do_not_call",
-                isDnc: true,
-                callbackRequested: false,
-                interested: false,
-            };
-        }
-
-        if (
-            text.includes("call me back") ||
-            text.includes("call tomorrow") ||
-            text.includes("call later") ||
-            text.includes("bad time") ||
-            text.includes("callback")
-        ) {
-            return {
-                outcome: ASE_OUTCOMES.CALLBACK,
-                disposition: "callback_requested",
-                isDnc: false,
-                callbackRequested: true,
-                interested: false,
-            };
-        }
-
-        if (
-            text.includes("interested") ||
-            text.includes("sounds good") ||
-            text.includes("tell me more") ||
-            text.includes("send details") ||
-            text.includes("book a call")
-        ) {
-            return {
-                outcome: ASE_OUTCOMES.INTERESTED,
-                disposition: "interested",
-                isDnc: false,
-                callbackRequested: false,
-                interested: true,
-            };
-        }
-
-        if (
-            text.includes("not interested") ||
-            text.includes("no thank you") ||
-            text.includes("not looking") ||
-            text.includes("no thanks")
-        ) {
-            return {
-                outcome: ASE_OUTCOMES.NOT_INTERESTED,
-                disposition: "not_interested",
-                isDnc: false,
-                callbackRequested: false,
-                interested: false,
-            };
-        }
-
-        if (!text.trim()) {
-            return {
-                outcome: ASE_OUTCOMES.AMBIGUOUS,
-                disposition: "connected_unspecified",
-                isDnc: false,
-                callbackRequested: false,
-                interested: false,
-            };
-        }
-
-        return {
-            outcome: ASE_OUTCOMES.AMBIGUOUS,
-            disposition: "unclassified",
-            isDnc: false,
-            callbackRequested: false,
-            interested: false,
-        };
+        return classifyProspectSpeech(transcript);
     }
 }
 

@@ -150,17 +150,17 @@ export const followUpEngine = {
             return { status: "skipped", reason: "dnc" };
         }
 
-        if (lead.email_consent && typeof lead.email_consent === "object" && lead.email_consent.status === "DENIED") {
+        if (!lead.email_consent || lead.email_consent.status !== "GRANTED") {
             await LeadEvent.create({
                 organization_id: orgId,
                 lead_id: lead.id,
                 channel: "SYSTEM",
                 event_type: "FOLLOW_UP_SKIPPED",
                 status: "SKIPPED",
-                payload: { reason: "Email consent was denied" },
-                idempotency_key: `lead_${lead.id}_skip_consent_denied`,
+                payload: { reason: "Email consent has not been granted" },
+                idempotency_key: `lead_${lead.id}_skip_consent_not_granted`,
             });
-            return { status: "skipped", reason: "consent_denied" };
+            return { status: "skipped", reason: "consent_not_granted" };
         }
 
         const domain = lead.email ? lead.email.split("@")[1] : null;
@@ -406,23 +406,28 @@ export const followUpEngine = {
         }
 
         if (cleanFrom) {
-            const candidates = orgId
-                ? await query(`SELECT * FROM leads WHERE LOWER(email) = ? AND (organization_id = ? OR organization_id IS NULL) ORDER BY id DESC`, [cleanFrom, orgId])
-                : await query(`SELECT * FROM leads WHERE LOWER(email) = ? ORDER BY id DESC`, [cleanFrom]);
+            const candidateSql = orgId
+                ? `SELECT id, organization_id FROM leads WHERE LOWER(email) = ? AND organization_id = ? ORDER BY id DESC`
+                : `SELECT id, organization_id FROM leads WHERE LOWER(email) = ? ORDER BY id DESC`;
+            const candidateParams = orgId ? [cleanFrom, orgId] : [cleanFrom];
+            const candidates = await query(candidateSql, candidateParams);
 
             if (candidates && candidates.length === 1) {
-                const lead = candidates[0];
-                const targetOrgId = orgId || lead.organization_id || 1;
-                const enrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, targetOrgId);
+                const targetOrgId = Number(candidates[0].organization_id || orgId);
+                const lead = await Lead.findById(candidates[0].id, targetOrgId);
+                const enrollment = await FollowUpEnrollment.findActiveByLeadId(candidates[0].id, targetOrgId);
                 return { matched: true, lead, enrollment: enrollment || null, task: null, matchedBy: "SENDER_EMAIL" };
             }
 
             if (candidates && candidates.length > 1) {
                 const withActive = [];
                 for (const c of candidates) {
-                    const targetOrgId = orgId || c.organization_id || 1;
+                    const targetOrgId = Number(c.organization_id || orgId);
                     const active = await FollowUpEnrollment.findActiveByLeadId(c.id, targetOrgId);
-                    if (active) withActive.push({ lead: c, enrollment: active });
+                    if (active) {
+                        const fullLead = await Lead.findById(c.id, targetOrgId);
+                        withActive.push({ lead: fullLead, enrollment: active });
+                    }
                 }
 
                 if (withActive.length === 1) {
@@ -435,12 +440,27 @@ export const followUpEngine = {
                     };
                 }
 
+                const orgs = [...new Set(candidates.map((c) => Number(c.organization_id)).filter(Boolean))];
                 return {
                     matched: false,
                     ambiguous: true,
-                    reason: "Multiple leads with identical email and active sequences",
+                    reason: "Multiple leads with identical email",
+                    organization_id: orgs.length === 1 ? orgs[0] : null,
                     candidateIds: candidates.map((c) => c.id),
                 };
+            }
+
+            if (orgId && (!candidates || candidates.length === 0)) {
+                const globalCandidates = await query(
+                    `SELECT id, organization_id FROM leads WHERE LOWER(email) = ? ORDER BY id DESC`,
+                    [cleanFrom]
+                );
+                if (globalCandidates && globalCandidates.length === 1) {
+                    const targetOrgId = Number(globalCandidates[0].organization_id);
+                    const lead = await Lead.findById(globalCandidates[0].id, targetOrgId);
+                    const enrollment = await FollowUpEnrollment.findActiveByLeadId(globalCandidates[0].id, targetOrgId);
+                    return { matched: true, lead, enrollment: enrollment || null, task: null, matchedBy: "SENDER_EMAIL" };
+                }
             }
         }
 

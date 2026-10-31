@@ -323,4 +323,36 @@ describe("Automated Reply Pause & Follow-Up Control Suite", () => {
         assert.ok(draftEvent.payload?.subject);
         assert.ok(draftEvent.payload?.bodyText || draftEvent.payload?.bodyHtml);
     });
+
+    test("13. Replies match a unique sender email even without In-Reply-To headers", async () => {
+        const leadG = await Lead.create({
+            organization_id: testOrgId,
+            user_id: 1,
+            name: "Unique Reply Lead",
+            email: `unique.reply.${Date.now()}@example.org`,
+            company: "Example Org",
+            status: "CONTACTED",
+        });
+
+        const matched = await followUpEngine.matchIncomingReply({
+            from: leadG.email,
+            subject: "Re: Hello",
+            messageId: "orphan_reply_001",
+        });
+        assert.equal(matched.matched, true);
+        assert.equal(Number(matched.lead.id), Number(leadG.id));
+        assert.equal(matched.matchedBy, "SENDER_EMAIL");
+    });
+
+    test("14. Clearing DNC removes suppression rows for the contact", async () => {
+        const email = `undnc.${Date.now()}@example.org`;
+        const phone = `+1555${String(Date.now()).slice(-7)}`;
+        await Suppression.add(testOrgId, "EMAIL", email, "Marked DNC via UI");
+        await Suppression.add(testOrgId, "PHONE", phone, "Marked DNC via UI");
+        assert.ok(await Suppression.isSuppressed(testOrgId, { email, phone }));
+
+        const removed = await Suppression.removeByContact(testOrgId, { email, phone });
+        assert.ok(removed >= 1);
+        assert.equal(await Suppression.isSuppressed(testOrgId, { email, phone }), false);
+    });
 });

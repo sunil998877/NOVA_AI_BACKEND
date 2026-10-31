@@ -1,0 +1,43 @@
+import { ASE_STATES, TERMINAL_STATES } from "./leadStateMachine.js";
+
+export const MAX_EMAILS = 3;
+export const MAX_CALLS = 2;
+export const DEFAULT_QUIET_DAYS = 14;
+
+export const HEALTH = Object.freeze({
+    GREEN: "GREEN",
+    AMBER: "AMBER",
+    RED: "RED",
+});
+
+export const AFTER_NO_RESPONSE = Object.freeze({
+    CLOSED_LOST: ASE_STATES.CLOSED_LOST,
+    RE_ENGAGEMENT_POOL: ASE_STATES.RE_ENGAGEMENT_POOL,
+});
+
+export const LEGAL_NEXT_ACTIONS = Object.freeze([
+    "EMAIL",
+    "CALL",
+    "WAIT",
+    "REP_CALLBACK",
+]);
+
+export const ILLEGAL_STATUS = "ATTEMPTED";
+
+export const HOT_STATUSES = Object.freeze([
+    ASE_STATES.INTERESTED,
+    ASE_STATES.CALLBACK_SCHEDULED,
+    ASE_STATES.WARM_TRANSFER,
+    ASE_STATES.HANDED_OFF,
+]);
+
+export const LIFECYCLE_REASONS = Object.freeze({
+    TERMINAL: "TERMINAL_STATE",
+    DNC: "DO_NOT_CONTACT",
+    ILLEGAL_ATTEMPTED: "ILLEGAL_ATTEMPTED",
+    CAPS_EXHAUSTED: "CAPS_EXHAUSTED",
+    QUIET_DAYS: "QUIET_DAYS",
+    NO_DISPATCHABLE_ACTION: "NO_DISPATCHABLE_ACTION",
+});
+
+export { ASE_STATES, TERMINAL_STATES };

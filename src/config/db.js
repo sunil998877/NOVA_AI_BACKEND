@@ -62,6 +62,7 @@ export const closeDb = async () => {
 };
 
 export const connectDb = async () => {
+    if (pool) return pool;
     const { host, port, user, password, database } = env.mysql;
 
     try {
@@ -87,7 +88,7 @@ export const connectDb = async () => {
             database,
             timezone: "Z",
             waitForConnections: true,
-            connectionLimit: 20,
+            connectionLimit: Number(process.env.MYSQL_POOL_SIZE || 8),
             queueLimit: 0,
             idleTimeout: 60000,
             connectTimeout: 20000,

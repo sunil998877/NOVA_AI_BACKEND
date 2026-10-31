@@ -1,6 +1,8 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { csvToLeads } from "../../services/leads/csvParser.js";
 import { processBatch, LEAD_SOURCES } from "../../services/leads/leadIntake.service.js";
+import { enqueueLeadImportJob } from "../../services/queue/enqueue.js";
+import { LeadImportJob } from "../../models/lead-import-job.model.js";
 
 const MAX_CSV_BYTES = 5 * 1024 * 1024;
 
@@ -48,12 +50,37 @@ export const importCsv = asyncHandler(async (req, res) => {
         return res.status(400).json({ error: "The CSV has no data rows" });
     }
 
+    const organizationId = Number(req.user.organization_id || 1);
+    const queued = await enqueueLeadImportJob({
+        organizationId,
+        userId: req.user.id,
+        source: LEAD_SOURCES.CSV,
+        updateExisting: Boolean(req.body.updateExisting),
+        leads: parsed.leads,
+    });
+    if (queued?.queued) {
+        return res.status(202).json({ data: queued });
+    }
+
     const summary = await processBatch(parsed.leads, {
-        organizationId: Number(req.user.organization_id || 1),
+        organizationId,
         userId: req.user.id,
         source: LEAD_SOURCES.CSV,
         updateExisting: Boolean(req.body.updateExisting),
         matchDomain: false,
     });
     return res.status(200).json({ data: summary });
+});
+
+export const getImportJob = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    const job = await LeadImportJob.findById(req.params.id, orgId);
+    if (!job) return res.status(404).json({ error: "Import job not found" });
+    return res.status(200).json({ data: job });
+});
+
+export const listImportJobs = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    const jobs = await LeadImportJob.listRecent(orgId, Number(req.query.limit || 20));
+    return res.status(200).json({ data: jobs });
 });

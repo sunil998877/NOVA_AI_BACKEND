@@ -16,6 +16,11 @@ export const ASE_EVENT_TYPES = Object.freeze({
     CALLBACK_COMPLETED: "CallbackCompleted",
     LEAD_SUPPRESSED: "LeadSuppressed",
     LEAD_CLOSED: "LeadClosed",
+    COMPANY_RESEARCH_REQUESTED: "COMPANY_RESEARCH_REQUESTED",
+    COMPANY_RESEARCH_COMPLETED: "COMPANY_RESEARCH_COMPLETED",
+    EMAIL_PERSONALIZATION_REQUESTED: "EMAIL_PERSONALIZATION_REQUESTED",
+    EMAIL_READY_FOR_APPROVAL: "EMAIL_READY_FOR_APPROVAL",
+    FOLLOWUP_SCHEDULED: "FOLLOWUP_SCHEDULED",
 });
 
 class EventBusService extends EventEmitter {
@@ -88,7 +93,7 @@ class EventBusService extends EventEmitter {
         try {
             const io = getIo();
             if (io) {
-                io.emit("ase:lead_event", envelope);
+                io.to(`org:${envelope.organization_id}`).emit("ase:lead_event", envelope);
             }
         } catch (_) {}
 

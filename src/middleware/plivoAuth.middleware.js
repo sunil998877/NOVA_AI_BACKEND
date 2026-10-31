@@ -87,3 +87,15 @@ export function plivoWebhookAuth(req, res, next) {
         return res.status(401).json({ error: "Unauthorized invalid Plivo signature format" });
     }
 }
+
+export function agentflowWebhookAuth(req, res, next) {
+    const secret = process.env.VOICE_WEBHOOK_SECRET || process.env.PLIVO_AUTH_TOKEN || process.env.PLIVO_AGENT_AUTH_TOKEN;
+    const provided = req.query?.token
+        || req.headers["x-webhook-secret"]
+        || req.body?.token
+        || req.body?.webhook_secret;
+    if (secret && provided && String(provided) === String(secret)) {
+        return next();
+    }
+    return plivoWebhookAuth(req, res, next);
+}

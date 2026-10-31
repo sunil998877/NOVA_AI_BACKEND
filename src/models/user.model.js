@@ -27,9 +27,17 @@ export const User = {
     },
 
     async create(data) {
+        const orgId = Number(data.organization_id);
+        const role = String(data.role || "").trim();
+        if (!Number.isFinite(orgId) || orgId < 1) {
+            throw new Error("organization_id is required");
+        }
+        if (!role) {
+            throw new Error("role is required");
+        }
         const result = await execute(
-            `INSERT INTO ${table} (fullName, organization, email, passwordHash, googleId, authProvider)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${table} (fullName, organization, email, passwordHash, googleId, authProvider, organization_id, role)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 data.fullName,
                 data.organization,
@@ -37,6 +45,8 @@ export const User = {
                 data.passwordHash ?? null,
                 data.googleId ?? null,
                 data.authProvider || "local",
+                orgId,
+                role,
             ]
         );
         return this.findById(result.insertId);
@@ -54,5 +64,28 @@ export const User = {
         const values = entries.map(([, value]) => value);
         await execute(`UPDATE ${table} SET ${sets} WHERE id = ?`, [...values, id]);
         return this.findById(id);
+    },
+
+    async listSalesRepIds(orgId) {
+        const rows = await this.listRoutableReps(orgId);
+        return rows.map((row) => Number(row.id)).filter(Boolean);
+    },
+
+    async listRoutableReps(orgId) {
+        const id = Number(orgId || 1);
+        const where = `organization_id = ? AND role IN ('SALESPERSON', 'SALES_MANAGER', 'ORG_ADMIN', 'SUPER_ADMIN')`;
+        try {
+            const rows = await query(
+                `SELECT id, role, fullName, email, team, territory FROM ${table} WHERE ${where}`,
+                [id]
+            );
+            return rows || [];
+        } catch {
+            const rows = await query(
+                `SELECT id, role, fullName, email FROM ${table} WHERE ${where}`,
+                [id]
+            );
+            return (rows || []).map((row) => ({ ...row, team: null, territory: null }));
+        }
     },
 };

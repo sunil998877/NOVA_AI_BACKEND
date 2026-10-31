@@ -2,6 +2,10 @@ import { Lead } from "../../models/lead.model.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { aseDecisionEngine } from "../../services/ase/brain/aseDecisionEngine.service.js";
 import { modelEvaluationService } from "../../services/ase/brain/modelEvaluation.service.js";
+import { getOperatingMode } from "../../services/ase/operatingMode.service.js";
+import { getLeadApproval } from "../../services/ase/approvalQueue.service.js";
+import { buildNbaCard } from "../../services/ase/nbaCard.service.js";
+export { getOperatingModeStatus, updateOperatingMode } from "../Ase/operating-mode.controller.js";
 
 export const getLeadDecision = asyncHandler(async (req, res) => {
     const orgId = Number(req.user?.organization_id || 1);
@@ -12,10 +16,16 @@ export const getLeadDecision = asyncHandler(async (req, res) => {
     }
 
     const decision = await aseDecisionEngine.evaluateLead(lead, { audit: false });
+    const [operatingMode, pendingApproval] = await Promise.all([
+        getOperatingMode(orgId).catch(() => "FULLY_AUTOMATED"),
+        getLeadApproval(orgId, lead.id).catch(() => null),
+    ]);
+    const nba = await buildNbaCard(lead, decision, { operatingMode, pendingApproval }).catch(() => null);
     return res.status(200).json({
         success: true,
         leadId: lead.id,
         decision,
+        nba,
     });
 });
 

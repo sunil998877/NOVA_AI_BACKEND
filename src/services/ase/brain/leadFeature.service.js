@@ -60,7 +60,7 @@ export const leadFeatureService = {
             }
         }
 
-        const emailConsentAllowed = lead.email_consent?.status !== "DENIED" && Boolean(lead.email);
+        const emailConsentAllowed = lead.email_consent?.status === "GRANTED" && Boolean(lead.email);
         const voiceConsentAllowed = lead.voice_consent?.status === "GRANTED" && Boolean(lead.phone);
         const signals = deriveModelSignals({
             emailAttempts,

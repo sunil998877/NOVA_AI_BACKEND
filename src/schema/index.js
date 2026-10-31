@@ -24,6 +24,10 @@ import { senderAccountSchema } from "./sender-account.schema.js";
 import { emailDeliverySchema } from "./email-delivery.schema.js";
 import { followUpSequenceSchema, followUpEnrollmentSchema, followUpTaskSchema, followUpAutomationSchema } from "./follow-up.schema.js";
 import { salesPlaybookSchema } from "./sales-playbook.schema.js";
+import { aseApprovalSchema } from "./ase-approval.schema.js";
+import { consentEventSchema } from "./consent-event.schema.js";
+import { orgInviteSchema } from "./org-invite.schema.js";
+import { leadImportJobSchema } from "./lead-import-job.schema.js";
 
 export const schemas = [
     organizationSchema,
@@ -55,6 +59,10 @@ export const schemas = [
     followUpTaskSchema,
     followUpAutomationSchema,
     salesPlaybookSchema,
+    aseApprovalSchema,
+    consentEventSchema,
+    orgInviteSchema,
+    leadImportJobSchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);
@@ -78,4 +86,8 @@ export {
     followUpTaskSchema,
     followUpAutomationSchema,
     salesPlaybookSchema,
+    aseApprovalSchema,
+    consentEventSchema,
+    orgInviteSchema,
+    leadImportJobSchema,
 };

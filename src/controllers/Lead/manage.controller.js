@@ -10,6 +10,17 @@ import { aseScheduler } from "../../services/ase/scheduler.service.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { query } from "../../config/db.js";
 import { draftCompanyPersonalizedEmail } from "../../services/ase/leadEmailDrafter.service.js";
+import { isUsableResearchProfile } from "../../services/ase/companyResearch.service.js";
+import { enqueueLeadCompanyResearch } from "../../services/leads/companyResearchQueue.js";
+import { getLeadApproval } from "../../services/ase/approvalQueue.service.js";
+import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
+import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
+import { haltOutreachForLead } from "../../services/ase/outreachHalt.service.js";
+import { buildConsentRecord, isConsentGranted } from "../../services/ase/consent.service.js";
+import { recordConsentEvent } from "../../services/ase/consentAudit.service.js";
+import { isTerminalStatus, sanitizeNextAction, sanitizeStatus } from "../../services/ase/lifecycle.service.js";
+import { buildNbaCard } from "../../services/ase/nbaCard.service.js";
+import { loggedDecisionFromTimeline } from "../../services/ase/nbaPresent.service.js";
 
 const TERMINAL_STATES = new Set(["CLOSED_WON", "CLOSED_LOST", "CLOSED_UNQUALIFIED", "SUPPRESSED_DNC"]);
 
@@ -18,13 +29,15 @@ export const listLeads = asyncHandler(async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
 
-    await Callback.ensureHandoffQueue(orgId).catch(() => {});
-
     const { items, total } = await Lead.list(orgId, {
         q: String(req.query.q || ""),
         source: String(req.query.source || ""),
         status: String(req.query.status || ""),
-        priority: req.query.priority !== undefined ? req.query.priority : null,
+        health: String(req.query.health || ""),
+        min_priority: req.query.min_priority !== undefined && req.query.min_priority !== "" ? Number(req.query.min_priority) : null,
+        email_consent: String(req.query.email_consent || ""),
+        do_not_contact: req.query.do_not_contact,
+        priority: req.query.priority !== undefined && req.query.priority !== "" ? req.query.priority : null,
         assigned_rep_id: req.query.assigned_rep_id ? Number(req.query.assigned_rep_id) : null,
         skip: (page - 1) * limit,
         limit,
@@ -35,40 +48,35 @@ export const listLeads = asyncHandler(async (req, res) => {
 
 export const getLead = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
-    let lead = await Lead.findById(req.params.id, orgId);
-    if (!lead) {
-        lead = await Lead.findById(req.params.id);
-    }
-    if (!lead) {
-        const callbackRows = await query(
-            `SELECT c.*, u.fullName as rep_name FROM callbacks c LEFT JOIN users u ON c.assigned_rep_id = u.id WHERE c.lead_id = ? OR c.id = ? LIMIT 1`,
-            [req.params.id, req.params.id]
-        );
-        if (callbackRows && callbackRows.length > 0) {
-            const cb = callbackRows[0];
-            lead = {
-                id: Number(req.params.id),
-                name: "Prospective Client",
-                company: null,
-                phone: null,
-                email: null,
-                status: "CALLBACK_SCHEDULED",
-                priority: 50,
-                health: "GREEN",
-                callback: {
-                    id: cb.id,
-                    due_at: cb.due_at,
-                    status: cb.status,
-                    notes: cb.notes,
-                    rep_name: cb.rep_name,
-                },
-            };
-        }
-    }
+    const lead = await Lead.findById(req.params.id, orgId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
+    if (lead.company && !isUsableResearchProfile(lead.metadata?.company_research)) {
+        enqueueLeadCompanyResearch(lead);
+    }
+
     const timeline = await LeadEvent.listByLead(orgId, lead.id, 100).catch(() => []);
-    return res.status(200).json({ data: { lead, timeline: timeline || [] } });
+    const [operatingMode, pendingApproval] = await Promise.all([
+        getOperatingMode(orgId).catch(() => OPERATING_MODES.FULLY_AUTOMATED),
+        getLeadApproval(orgId, lead.id).catch(() => null),
+    ]);
+    const nba = await buildNbaCard(
+        lead,
+        loggedDecisionFromTimeline(timeline) || {
+            action: lead.next_action,
+            scheduledTime: lead.next_action_time,
+        },
+        { operatingMode, pendingApproval }
+    ).catch(() => null);
+    return res.status(200).json({
+        data: {
+            lead,
+            timeline: timeline || [],
+            operatingMode,
+            pendingApproval,
+            nba,
+        },
+    });
 });
 
 export const updateLead = asyncHandler(async (req, res) => {
@@ -77,7 +85,39 @@ export const updateLead = asyncHandler(async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const updates = { ...req.body };
+    const actorUserId = req.user.id;
+    const consentChanges = [];
+
+    if (updates.consentEmail !== undefined || updates.email_consent !== undefined) {
+        const next = updates.email_consent && typeof updates.email_consent === "object"
+            ? buildConsentRecord({
+                status: updates.email_consent.status ?? updates.consentEmail,
+                source: updates.email_consent.source || "form",
+                actorUserId,
+            })
+            : buildConsentRecord({ status: updates.consentEmail, source: "form", actorUserId });
+        updates.email_consent = next;
+        delete updates.consentEmail;
+        consentChanges.push(["EMAIL", next]);
+    }
+    if (updates.consentVoice !== undefined || updates.voice_consent !== undefined) {
+        const next = updates.voice_consent && typeof updates.voice_consent === "object"
+            ? buildConsentRecord({
+                status: updates.voice_consent.status ?? updates.consentVoice,
+                source: updates.voice_consent.source || "form",
+                actorUserId,
+            })
+            : buildConsentRecord({ status: updates.consentVoice, source: "form", actorUserId });
+        updates.voice_consent = next;
+        delete updates.consentVoice;
+        consentChanges.push(["VOICE", next]);
+    }
+
     const oldStatus = lead.status;
+    if (updates.status) updates.status = sanitizeStatus(updates.status);
+    if (Object.prototype.hasOwnProperty.call(updates, "next_action")) {
+        updates.next_action = sanitizeNextAction(updates.next_action);
+    }
     const newStatus = updates.status;
 
     if (updates.metadata && typeof updates.metadata === "object") {
@@ -87,18 +127,45 @@ export const updateLead = asyncHandler(async (req, res) => {
         };
     }
 
-    if (updates.do_not_contact) {
+    const dncFlag = updates.do_not_contact;
+    const markDnc = dncFlag === true || dncFlag === 1 || dncFlag === "1";
+    const clearDnc = dncFlag === false || dncFlag === 0 || dncFlag === "0";
+
+    if (markDnc) {
+        updates.do_not_contact = 1;
         updates.status = "SUPPRESSED_DNC";
         updates.next_action = null;
         updates.next_action_time = null;
         await Suppression.add(orgId, "EMAIL", lead.email, "Marked DNC via UI");
         if (lead.phone) await Suppression.add(orgId, "PHONE", lead.phone, "Marked DNC via UI");
-    } else if (newStatus && TERMINAL_STATES.has(newStatus)) {
+        await haltOutreachForLead(orgId, lead.id, "Marked DNC via UI");
+    } else if (clearDnc) {
+        updates.do_not_contact = 0;
+        if (!newStatus || newStatus === "SUPPRESSED_DNC") {
+            updates.status = "CONTACTED";
+        }
+        await Suppression.removeByContact(orgId, { email: lead.email, phone: lead.phone });
+    } else if (newStatus && (TERMINAL_STATES.has(newStatus) || isTerminalStatus(newStatus))) {
         updates.next_action = null;
         updates.next_action_time = null;
     }
 
     const updated = await Lead.updateById(lead.id, updates, orgId);
+
+    for (const [channel, consent] of consentChanges) {
+        await recordConsentEvent({
+            organizationId: orgId,
+            leadId: lead.id,
+            channel,
+            status: consent.status,
+            source: consent.source,
+            actorUserId,
+        });
+    }
+
+    if (!markDnc && newStatus && isTerminalStatus(newStatus) && newStatus !== oldStatus) {
+        await haltOutreachForLead(orgId, lead.id, `Lead closed (${newStatus})`);
+    }
 
     if (newStatus && newStatus !== oldStatus) {
         await LeadEvent.create({
@@ -199,9 +266,19 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
     let lead = await Lead.findById(req.params.id, orgId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     if (lead.do_not_contact) return res.status(400).json({ error: "Lead is suppressed (Do Not Contact)" });
+    if (lead?.metadata?.outreach_hold?.held) {
+        return res.status(400).json({ error: "Lead outreach is on hold. Click Unhold first." });
+    }
     if (TERMINAL_STATES.has(lead.status)) return res.status(400).json({ error: "Lead is in a terminal state" });
 
     const startedAt = Date.now();
+    if (lead.next_action === "REP_CALLBACK") {
+        return res.status(400).json({
+            error: "This lead is waiting on a human callback",
+            data: { lead, executed: false },
+        });
+    }
+
     const validActions = new Set(["EMAIL", "CALL"]);
     let action = validActions.has(lead.next_action) ? lead.next_action : null;
 
@@ -212,9 +289,9 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
             const counters = typeof lead.attempt_counters === "string"
                 ? JSON.parse(lead.attempt_counters || "{}")
                 : (lead.attempt_counters || { email: 0, voice: 0, total: 0 });
-            if (lead.email && counters.email < 3 && lead.email_consent?.status !== "DENIED") {
+            if (lead.email && counters.email < 3 && isConsentGranted(lead.email_consent)) {
                 action = "EMAIL";
-            } else if (lead.phone && counters.voice < 2 && lead.voice_consent?.status !== "DENIED") {
+            } else if (lead.phone && counters.voice < 2 && isConsentGranted(lead.voice_consent)) {
                 action = "CALL";
             }
         }
@@ -223,12 +300,21 @@ export const executeLeadAction = asyncHandler(async (req, res) => {
         }
     }
 
+    const mode = await getOperatingMode(orgId);
+    if (mode === OPERATING_MODES.AI_RECOMMENDED) {
+        return res.status(400).json({
+            error: "AI-Recommended mode requires Approve & send. This will not send on its own.",
+            data: { lead, executed: false, operatingMode: mode },
+        });
+    }
+
     lead = await Lead.updateById(lead.id, {
         next_action: action,
         next_action_time: new Date(),
     }, orgId);
 
-    const result = await aseScheduler.processLeadAction(lead, { force: true });
+    const flags = executionFlagsForMode(mode, { humanInitiated: true });
+    const result = await aseScheduler.processLeadAction(lead, flags);
     const updated = await Lead.findById(lead.id, orgId);
     const elapsedMs = Date.now() - startedAt;
 

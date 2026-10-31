@@ -56,6 +56,64 @@ const serialize = (key, value) => {
     return value;
 };
 
+function flagValue(value) {
+    if (value === true || value === 1 || value === "1") return 1;
+    if (value === false || value === 0 || value === "0") return 0;
+    return null;
+}
+
+export function buildLeadWhere(orgId, filters = {}) {
+    const where = ["l.organization_id = ?"];
+    const params = [orgId];
+    const source = String(filters.source || "").trim();
+    const status = String(filters.status || "").trim();
+    const health = String(filters.health || "").trim().toUpperCase();
+    const emailConsent = String(filters.emailConsent || filters.email_consent || "").trim().toUpperCase();
+    const minPriority = filters.minPriority ?? filters.min_priority;
+    const doNotContact = flagValue(filters.doNotContact ?? filters.do_not_contact);
+    const q = String(filters.q || "").trim();
+
+    if (source) {
+        where.push("l.source = ?");
+        params.push(source);
+    }
+    if (status) {
+        where.push("l.status = ?");
+        params.push(status);
+    }
+    if (health) {
+        where.push("l.health = ?");
+        params.push(health);
+    }
+    if (minPriority !== null && minPriority !== undefined && minPriority !== "") {
+        where.push("l.priority >= ?");
+        params.push(Number(minPriority));
+    }
+    if (filters.priority !== null && filters.priority !== undefined && filters.priority !== "") {
+        where.push("l.priority = ?");
+        params.push(Number(filters.priority));
+    }
+    if (emailConsent) {
+        where.push("JSON_UNQUOTE(JSON_EXTRACT(l.email_consent, '$.status')) = ?");
+        params.push(emailConsent);
+    }
+    if (doNotContact !== null) {
+        where.push("l.do_not_contact = ?");
+        params.push(doNotContact);
+    }
+    if (filters.assigned_rep_id) {
+        where.push("l.assigned_rep_id = ?");
+        params.push(Number(filters.assigned_rep_id));
+    }
+    if (q) {
+        const like = `%${q}%`;
+        where.push("(l.name LIKE ? OR l.email LIKE ? OR l.company LIKE ? OR l.phone LIKE ?)");
+        params.push(like, like, like, like);
+    }
+
+    return { whereSql: where.join(" AND "), params };
+}
+
 export const Lead = {
     async findById(id, orgId = null) {
         const selected = columns.split(",").map((column) => `l.${column.trim()}`).join(", ");
@@ -137,35 +195,10 @@ export const Lead = {
         return toLead(rows[0]);
     },
 
-    async list(orgId, { q = "", source = "", status = "", priority = null, assigned_rep_id = null, skip = 0, limit = 50 } = {}) {
-        const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
-        const safeSkip = Math.max(Number(skip) || 0, 0);
-        const where = ["l.organization_id = ?"];
-        const params = [orgId];
-
-        if (source) {
-            where.push("l.source = ?");
-            params.push(source);
-        }
-        if (status) {
-            where.push("l.status = ?");
-            params.push(status);
-        }
-        if (priority !== null && priority !== undefined) {
-            where.push("l.priority = ?");
-            params.push(Number(priority));
-        }
-        if (assigned_rep_id) {
-            where.push("l.assigned_rep_id = ?");
-            params.push(Number(assigned_rep_id));
-        }
-        if (q && q.trim()) {
-            const like = `%${q.trim()}%`;
-            where.push("(l.name LIKE ? OR l.email LIKE ? OR l.company LIKE ? OR l.phone LIKE ?)");
-            params.push(like, like, like, like);
-        }
-
-        const whereSql = where.join(" AND ");
+    async list(orgId, filters = {}) {
+        const safeLimit = Math.min(Math.max(Number(filters.limit) || 50, 1), 200);
+        const safeSkip = Math.max(Number(filters.skip) || 0, 0);
+        const { whereSql, params } = buildLeadWhere(orgId, filters);
         const selected = columns.split(",").map((column) => `l.${column.trim()}`).join(", ");
         const rows = await query(
             `SELECT ${selected}, u.fullName AS assigned_rep_name,
@@ -196,6 +229,12 @@ export const Lead = {
         return { items: rows.map(toLead), total: Number(countRows[0]?.total || 0) };
     },
 
+    async countMatching(orgId, filters = {}) {
+        const { whereSql, params } = buildLeadWhere(orgId, filters);
+        const rows = await query(`SELECT COUNT(*) AS total FROM ${table} l WHERE ${whereSql}`, params);
+        return Number(rows[0]?.total || 0);
+    },
+
     async countByStatus(orgId) {
         const rows = await query(
             `SELECT status, COUNT(*) AS total FROM ${table} WHERE organization_id = ? GROUP BY status`,
@@ -213,17 +252,19 @@ export const Lead = {
     },
 
     async findDueForAction(limit = 20, now = new Date()) {
+        const take = Number(limit) || 20;
         const rows = await query(
             `SELECT ${columns} FROM ${table}
              WHERE next_action_time IS NOT NULL 
                AND next_action_time <= ?
                AND do_not_contact = 0
-               AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
+               AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC', 'ATTEMPTED', 'WARM_TRANSFER', 'HANDED_OFF', 'CALLBACK_SCHEDULED')
+               AND next_action IN ('EMAIL', 'CALL', 'WAIT')
              ORDER BY priority DESC, next_action_time ASC
              LIMIT ?`,
-            [now, Number(limit) || 20]
+            [now, Math.max(take * 3, 20)]
         );
-        return rows.map(toLead);
+        return rows.map(toLead).filter((lead) => !lead?.metadata?.outreach_hold?.held).slice(0, take);
     },
 
     async findUnscheduledNew(limit = 10) {
@@ -231,10 +272,45 @@ export const Lead = {
             `SELECT ${columns} FROM ${table}
              WHERE (status = 'NEW' OR (status = 'QUEUED' AND next_action_time IS NULL))
                AND do_not_contact = 0
-               AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
+               AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC', 'ATTEMPTED')
              ORDER BY priority DESC, created_at ASC
              LIMIT ?`,
             [Number(limit) || 10]
+        );
+        return rows.map(toLead);
+    },
+
+    async findIllegalLifecycle(limit = 20) {
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE do_not_contact = 0
+               AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
+               AND (status = 'ATTEMPTED' OR next_action = 'ATTEMPTED'
+                    OR (next_action IS NOT NULL AND next_action NOT IN ('EMAIL', 'CALL', 'WAIT', 'REP_CALLBACK')))
+             ORDER BY updated_at ASC
+             LIMIT ?`,
+            [Number(limit) || 20]
+        );
+        return rows.map(toLead);
+    },
+
+    async findQuietForClose({ quietBefore, limit = 20 } = {}) {
+        const cutoff = quietBefore instanceof Date ? quietBefore : new Date(quietBefore || Date.now());
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE do_not_contact = 0
+               AND status NOT IN (
+                    'CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC',
+                    'INTERESTED', 'CALLBACK_SCHEDULED', 'WARM_TRANSFER', 'HANDED_OFF'
+               )
+               AND (next_action IS NULL OR next_action <> 'REP_CALLBACK')
+               AND (
+                    (last_contacted_at IS NOT NULL AND last_contacted_at <= ?)
+                    OR (last_contacted_at IS NULL AND created_at <= ?)
+               )
+             ORDER BY COALESCE(last_contacted_at, created_at) ASC
+             LIMIT ?`,
+            [cutoff, cutoff, Number(limit) || 20]
         );
         return rows.map(toLead);
     },

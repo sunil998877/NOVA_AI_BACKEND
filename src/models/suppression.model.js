@@ -70,4 +70,27 @@ export const Suppression = {
         ]);
         return result.affectedRows > 0;
     },
+
+    async removeByContact(orgId, { email, phone } = {}) {
+        const conditions = [];
+        const params = [Number(orgId)];
+
+        if (email) {
+            conditions.push("(type = 'EMAIL' AND value = ?)");
+            params.push(String(email).toLowerCase().trim());
+        }
+        if (phone) {
+            const trimmed = String(phone).trim();
+            conditions.push("(type = 'PHONE' AND value IN (?, ?))");
+            params.push(trimmed, trimmed.toLowerCase());
+        }
+
+        if (conditions.length === 0) return 0;
+
+        const result = await execute(
+            `DELETE FROM ${table} WHERE organization_id = ? AND (${conditions.join(" OR ")})`,
+            params
+        );
+        return Number(result?.affectedRows || 0);
+    },
 };

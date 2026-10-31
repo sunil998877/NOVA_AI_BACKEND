@@ -99,6 +99,66 @@ test("NOVA Brain: Suppressed, closed, or terminal leads are blocked", async () =
     assert.equal(decision.reasonCode, "SUPPRESSION_LIST_MATCH");
 });
 
+test("NOVA Brain: Timing head uses ML delay_hours for calls", () => {
+    const features = leadFeatureService.extractFeatures({
+        id: 201,
+        email: "timing@acme.com",
+        phone: "+15550192834",
+        status: "CONTACTED",
+        attempt_counters: { email: 1, voice: 0 },
+        email_consent: { status: "GRANTED" },
+        voice_consent: { status: "GRANTED" },
+        last_contacted_at: new Date(Date.now() - 10 * 3600 * 1000).toISOString(),
+        link_clicks: 2,
+    });
+    const decision = nextBestActionService.determineNextBestAction({
+        eligibility: { candidateActions: ["EMAIL", "CALL"], cooldownRequired: false },
+        features,
+        priority: { tier: "P3_NORMAL", score: 50 },
+        prediction: { available: true, action: "CALL", delay_hours: 6, confidence: 0.8 },
+    });
+    assert.equal(decision.recommendedAction, "CALL");
+    assert.equal(decision.delayHours, 6);
+});
+
+test("NOVA Brain: Follow-up cadence blocks extra emails but still allows a call", async () => {
+    FollowUpEnrollment.findActiveByLeadId = async () => ({ id: 9, status: "ACTIVE" });
+    const lead = {
+        id: 202,
+        organization_id: 1,
+        email: "cadence@acme.com",
+        phone: "+15550192834",
+        status: "CONTACTED",
+        attempt_counters: { email: 1, voice: 0 },
+        email_consent: { status: "GRANTED" },
+        voice_consent: { status: "GRANTED" },
+        last_contacted_at: new Date().toISOString(),
+    };
+    const features = leadFeatureService.extractFeatures(lead);
+    const eligibility = await decisionPolicyService.evaluateEligibility(lead, features);
+    assert.equal(eligibility.candidateActions.includes("EMAIL"), false);
+    assert.equal(eligibility.candidateActions.includes("CALL"), true);
+    FollowUpEnrollment.findActiveByLeadId = async () => null;
+});
+
+test("NOVA Brain: Call right after the first email waits at least 15 minutes", () => {
+    const decision = nextBestActionService.determineNextBestAction({
+        eligibility: { candidateActions: ["CALL"], cooldownRequired: false },
+        features: {
+            emailAttempts: 1,
+            voiceAttempts: 0,
+            linkClicks: 0,
+            hoursSinceLastTouch: 0,
+            voiceConsentAllowed: true,
+            emailConsentAllowed: true,
+        },
+        priority: { tier: "P3_NORMAL", score: 50 },
+        prediction: { available: true, action: "CALL", delay_hours: 0, confidence: 0.9 },
+    });
+    assert.equal(decision.recommendedAction, "CALL");
+    assert.ok(decision.delayHours >= 0.25);
+});
+
 test("NOVA Brain: Model inference cannot override compliance rules", async () => {
     const lead = {
         id: 106,

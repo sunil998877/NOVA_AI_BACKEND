@@ -3,6 +3,7 @@ import { Callback } from "../../models/callback.model.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { eventBus } from "../../services/ase/eventBus.service.js";
+import { routeUnassignedHandoffs } from "../../services/ase/routingAssign.service.js";
 
 export const listCallbacks = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
@@ -10,6 +11,7 @@ export const listCallbacks = asyncHandler(async (req, res) => {
     const p = Math.max(Number(page) || 1, 1);
     const l = Math.min(Math.max(Number(limit) || 50, 1), 200);
 
+    await routeUnassignedHandoffs(orgId).catch(() => ({ assigned: 0 }));
     await Callback.ensureHandoffQueue(orgId);
 
     const items = await Callback.list(orgId, {
@@ -97,12 +99,16 @@ export const updateCallback = asyncHandler(async (req, res) => {
         const disp = req.body.leadDisposition || "";
         if (disp === "closed_won" || disp === "deal_won") {
             finalStatus = "CLOSED_WON";
-        } else if (disp === "not_interested" || disp === "closed_lost") {
+        } else if (disp === "not_interested" || disp === "closed_lost" || disp === "connected_not_interested") {
             finalStatus = "CLOSED_LOST";
         } else if (disp === "do_not_call" || disp === "dnc") {
             finalStatus = "SUPPRESSED_DNC";
-        } else if (req.body.nextCallbackDue) {
+        } else if (disp === "connected_interested" || disp === "interested" || disp === "qualified") {
+            finalStatus = "INTERESTED";
+        } else if (disp === "callback_requested" || disp === "human_handoff" || req.body.nextCallbackDue) {
             finalStatus = "CALLBACK_SCHEDULED";
+        } else if (disp === "no_answer" || disp === "busy" || disp === "invalid_number") {
+            finalStatus = existing.lead_status || "CONTACTED";
         }
 
         await Lead.updateById(

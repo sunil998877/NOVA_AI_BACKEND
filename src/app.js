@@ -21,6 +21,7 @@ import aseVoiceRoutes from "./routes/ase-voice.routes.js";
 import senderAccountRoutes from "./routes/sender-account.routes.js";
 import followUpRoutes from "./routes/followUp.routes.js";
 import playbookRoutes from "./routes/playbook.routes.js";
+import aseOperatingRoutes from "./routes/ase-operating.routes.js";
 import { handleN8nChatEvent } from "./controllers/Webhook/n8n-chat.controller.js";
 import { runAseIntegrationTests } from "./tests/ase_integration.test.js";
 import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
@@ -148,6 +149,7 @@ app.use("/api/engine/voice", aseVoiceRoutes);
 app.use("/api/sender-accounts", senderAccountRoutes);
 app.use("/api/follow-ups", followUpRoutes);
 app.use("/api/playbook", playbookRoutes);
+app.use("/api/ase", aseOperatingRoutes);
 app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
 
 app.all("/api/engine/check-email-replies", async (_req, res) => {

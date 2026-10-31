@@ -77,6 +77,34 @@ export const nextBestActionService = {
             }
         }
 
+        const mlDelay = Number(prediction?.delay_hours ?? prediction?.delayHours);
+        if (prediction?.available && Number.isFinite(mlDelay) && mlDelay >= 0) {
+            delayHours = mlDelay;
+        }
+
+        if (finalAction === "EMAIL" && Number(features.emailAttempts || 0) === 0) {
+            delayHours = 0;
+        }
+
+        if (finalAction === "CALL" && Number(features.linkClicks || 0) === 0) {
+            const since = Number(features.hoursSinceLastTouch || 0);
+            if (since < minTouchGap) {
+                delayHours = Math.max(delayHours, minTouchGap - since);
+            }
+        }
+
+        if (
+            (finalAction === "CALL" || finalAction === null)
+            && Number(features.emailAttempts || 0) >= 1
+            && Number(features.voiceAttempts || 0) === 0
+            && Number(features.linkClicks || 0) === 0
+            && Number(features.hoursSinceLastTouch || 0) < 1
+        ) {
+            delayHours = Math.max(delayHours, 0.25);
+        }
+
+        delayHours = Math.min(72, Math.max(0, Number(delayHours) || 0));
+
         return {
             recommendedAction: finalAction,
             delayHours,

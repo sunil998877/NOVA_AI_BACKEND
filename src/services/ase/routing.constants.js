@@ -1,0 +1,15 @@
+export const ROUTABLE_ROLES = Object.freeze([
+    "SALESPERSON",
+    "SALES_MANAGER",
+    "ORG_ADMIN",
+    "SUPER_ADMIN",
+]);
+
+export const ROUTING_STRATEGIES = Object.freeze({
+    EXISTING: "EXISTING",
+    TERRITORY: "TERRITORY",
+    TEAM: "TEAM",
+    WORKLOAD: "WORKLOAD",
+    ROUND_ROBIN: "ROUND_ROBIN",
+    UNASSIGNED: "UNASSIGNED",
+});

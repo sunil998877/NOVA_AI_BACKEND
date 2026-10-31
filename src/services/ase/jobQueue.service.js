@@ -1,44 +1,20 @@
-import { env } from "../../config/env.js";
-
-let BullQueue = null;
-let BullWorker = null;
-
-try {
-    const bullmq = await import("bullmq");
-    BullQueue = bullmq.Queue;
-    BullWorker = bullmq.Worker;
-} catch (_) { }
+import { enqueueAseActionJob } from "../queue/enqueue.js";
+import { shouldEnqueueToRedis } from "../../config/redis.js";
 
 class JobQueueService {
     constructor() {
         this.queueName = "ase-actions";
-        this.redisUrl = process.env.REDIS_URL || null;
-        this.queue = null;
-        this.worker = null;
         this.localQueue = [];
+        this.voiceInFlight = 0;
         this.metrics = {
             totalEnqueued: 0,
             totalProcessed: 0,
             totalFailed: 0,
             activeWorkers: 0,
-            mode: "database_fallback",
+            mode: shouldEnqueueToRedis() ? "bullmq_redis" : "database_fallback",
         };
-
-        this.init();
-    }
-
-    init() {
-        if (BullQueue && this.redisUrl) {
-            try {
-                this.queue = new BullQueue(this.queueName, {
-                    connection: { url: this.redisUrl },
-                });
-                this.metrics.mode = "bullmq_redis";
-            } catch (_) {
-                this.queue = null;
-                this.metrics.mode = "database_fallback";
-            }
-        }
+        this.fallbackTimer = null;
+        this.handler = null;
     }
 
     async enqueueAction({ leadId, orgId = 1, action, delayMs = 0, payload = {}, idempotencyKey = null, maxAttempts = 3 }) {
@@ -55,60 +31,40 @@ class JobQueueService {
             enqueuedAt: new Date().toISOString(),
         };
 
-        if (this.queue && this.metrics.mode === "bullmq_redis") {
-            try {
-                await this.queue.add("execute_action", jobData, {
-                    jobId,
-                    delay: delayMs,
-                    attempts: maxAttempts,
-                    backoff: {
-                        type: "exponential",
-                        delay: 10000,
-                    },
-                    removeOnComplete: true,
-                });
-                return { enqueued: true, mode: "bullmq_redis", jobId };
-            } catch (err) {
-                this.metrics.mode = "database_fallback";
+        if (shouldEnqueueToRedis()) {
+            const queued = await enqueueAseActionJob(jobData, { jobId, delayMs, maxAttempts });
+            if (queued) {
+                this.metrics.mode = "bullmq_redis";
+                return { enqueued: true, mode: "bullmq_redis", jobId: queued.id || jobId };
             }
+            this.metrics.mode = "database_fallback";
         }
 
         const runAt = Date.now() + delayMs;
         this.localQueue.push({ ...jobData, runAt });
+        this.metrics.mode = "database_fallback";
         return { enqueued: true, mode: "database_fallback", jobId };
     }
 
     registerWorker(handler) {
-        if (BullWorker && this.redisUrl && this.metrics.mode === "bullmq_redis") {
-            try {
-                this.worker = new BullWorker(
-                    this.queueName,
-                    async (job) => {
-                        this.metrics.totalProcessed += 1;
-                        return handler(job.data);
-                    },
-                    { connection: { url: this.redisUrl }, concurrency: 5 }
-                );
-                this.metrics.activeWorkers = 1;
-                return;
-            } catch (_) { }
-        }
-
+        this.handler = handler;
         this.metrics.activeWorkers = 1;
-        setInterval(async () => {
+        if (this.fallbackTimer) return;
+        this.fallbackTimer = setInterval(async () => {
+            if (!this.handler) return;
             const now = Date.now();
-            const dueIndices = [];
-            for (let i = 0; i < this.localQueue.length; i++) {
-                if (this.localQueue[i].runAt <= now) {
-                    dueIndices.push(i);
+            const due = [];
+            this.localQueue = this.localQueue.filter((job) => {
+                if (job.runAt <= now) {
+                    due.push(job);
+                    return false;
                 }
-            }
-
-            for (const idx of dueIndices.reverse()) {
-                const job = this.localQueue.splice(idx, 1)[0];
+                return true;
+            });
+            for (const job of due) {
                 try {
                     this.metrics.totalProcessed += 1;
-                    await handler(job);
+                    await this.handler(job);
                 } catch (err) {
                     this.metrics.totalFailed += 1;
                     if (job.attempts < job.maxAttempts) {
@@ -121,17 +77,34 @@ class JobQueueService {
         }, 5000);
     }
 
+    getVoiceInFlight() {
+        return this.voiceInFlight;
+    }
+
+    beginVoiceJob() {
+        this.voiceInFlight += 1;
+        return this.voiceInFlight;
+    }
+
+    endVoiceJob() {
+        this.voiceInFlight = Math.max(0, this.voiceInFlight - 1);
+        return this.voiceInFlight;
+    }
+
     getMetrics() {
         return {
             ...this.metrics,
             pendingLocalJobs: this.localQueue.length,
+            voiceInFlight: this.voiceInFlight,
             timestamp: new Date().toISOString(),
         };
     }
 
     async close() {
-        if (this.worker) await this.worker.close();
-        if (this.queue) await this.queue.close();
+        if (this.fallbackTimer) {
+            clearInterval(this.fallbackTimer);
+            this.fallbackTimer = null;
+        }
     }
 }
 

@@ -70,6 +70,8 @@ const HEADER_ALIASES = {
     priority: ["priority", "score", "lead priority", "rating"],
     whatsapp_number: ["whatsapp", "whatsapp number", "wa", "whatsapp_number"],
     industry: ["industry", "sector", "vertical"],
+    consentEmail: ["consent email", "email consent", "consentemail", "opt in email"],
+    consentVoice: ["consent voice", "voice consent", "consentvoice", "opt in voice", "call consent"],
 };
 
 export function autoDetectMapping(headers) {

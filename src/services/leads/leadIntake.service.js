@@ -6,6 +6,8 @@ import { enqueueLeadCompanyResearch } from "./companyResearchQueue.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { query } from "../../config/db.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
+import { consentFromIntake, isConsentGranted } from "../ase/consent.service.js";
+import { recordLeadConsentSnapshot } from "../ase/consentAudit.service.js";
 
 export const LEAD_SOURCES = Object.freeze({
     API: "API",
@@ -65,22 +67,7 @@ async function withLocks(keys, fn) {
 
 const isDuplicateKey = (error) => error?.code === "ER_DUP_ENTRY" || error?.errno === 1062;
 
-const consentRecord = (explicit, flag, source) => {
-    if (explicit && typeof explicit === "object" && explicit.status) {
-        return {
-            status: String(explicit.status).toUpperCase(),
-            source: explicit.source || source || "INGESTION",
-            timestamp: explicit.timestamp || new Date().toISOString(),
-        };
-    }
-    if (flag === true) {
-        return { status: "GRANTED", source: source || "INGESTION", timestamp: new Date().toISOString() };
-    }
-    if (flag === false) {
-        return { status: "DENIED", source: source || "INGESTION", timestamp: new Date().toISOString() };
-    }
-    return { status: "UNKNOWN", source: source || "INGESTION", timestamp: new Date().toISOString() };
-};
+const consentRecord = (explicit, flag, source) => consentFromIntake(explicit, flag, source);
 
 const clean = (value, max = 255) => {
     if (value === undefined || value === null) return null;
@@ -273,22 +260,7 @@ async function ingestLockedLead(data, {
 
     const isSuppressedBool = Boolean(isSuppressed);
     const doNotContact = isSuppressedBool ? 1 : 0;
-    const emailAllowed = !isSuppressedBool && data.email_consent?.status !== "DENIED";
-
-    if (emailAllowed && (!data.email_consent || data.email_consent.status === "UNKNOWN")) {
-        data.email_consent = {
-            status: "GRANTED",
-            source: source || "CSV_IMPORT",
-            timestamp: new Date().toISOString(),
-        };
-    }
-    if (data.phone && (!data.voice_consent || data.voice_consent.status === "UNKNOWN")) {
-        data.voice_consent = {
-            status: "GRANTED",
-            source: source || "CSV_IMPORT",
-            timestamp: new Date().toISOString(),
-        };
-    }
+    const emailAllowed = !isSuppressedBool && isConsentGranted(data.email_consent);
 
     const initialStatus = isSuppressedBool ? "SUPPRESSED_DNC" : emailAllowed ? "QUEUED" : "NEW";
     const nextAction = isSuppressedBool || !emailAllowed ? null : "EMAIL";
@@ -343,6 +315,7 @@ async function ingestLockedLead(data, {
         status: initialStatus,
         payload: { source, priority: lead.priority, isSuppressed: Boolean(isSuppressed) },
     });
+    await recordLeadConsentSnapshot(lead, { organizationId, actorUserId: userId });
 
     if (isSuppressed) {
         await LeadEvent.create({
@@ -429,6 +402,7 @@ export async function processBatch(rawLeads, options = {}) {
 
     const CONCURRENCY = 12;
     let index = 0;
+    const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
 
     const workers = new Array(CONCURRENCY).fill(null).map(async () => {
         while (index < rows.length) {
@@ -452,6 +426,9 @@ export async function processBatch(rawLeads, options = {}) {
                 if (summary.errors.length < 100) {
                     summary.errors.push({ row: i + 1, email: row?.email ?? null, error: error.message });
                 }
+            }
+            if (onProgress && (i + 1) % 25 === 0) {
+                await onProgress(i + 1, summary);
             }
         }
     });
