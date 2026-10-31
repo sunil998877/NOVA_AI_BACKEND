@@ -4,6 +4,7 @@ import { Call } from "../../models/call.model.js";
 import { TelephonyWebhookEvent } from "../../models/telephony-webhook-event.model.js";
 import { eventBus } from "./eventBus.service.js";
 import { normalizeTelephonyOutcome, extractCallTranscript } from "./outcomeNormalizer.service.js";
+import { isClickToCallRecord, parseCallMeta } from "./clickToCall.service.js";
 
 const TERMINAL_STATUSES = new Set([
     "completed",
@@ -112,13 +113,17 @@ export async function applyPlivoCallPayload(rawPayload = {}) {
         });
         existingCall = createResult.call;
     } else if (existingCall) {
+        const prevMeta = parseCallMeta(existingCall.raw_metadata);
+        const clickToCall = isClickToCallRecord(existingCall) || prevMeta.mode === "click_to_call";
         const callUpdates = {
-            provider_status: callStatus,
-            normalized_outcome: normalized.normalizedOutcome,
-            duration_sec: Math.max(existingCall.duration_sec || 0, rawDuration),
+            provider_status: clickToCall ? existingCall.provider_status : callStatus,
+            normalized_outcome: clickToCall ? existingCall.normalized_outcome : normalized.normalizedOutcome,
+            duration_sec: Math.max(existingCall.duration_sec || 0, clickToCall ? (prevMeta.connectedDurationSec || 0) : rawDuration),
             billable_duration_sec: Math.max(existingCall.billable_duration_sec || 0, rawBillDuration),
             hangup_cause: hangupCause || existingCall.hangup_cause,
-            raw_metadata: payload,
+            raw_metadata: clickToCall
+                ? { ...prevMeta, lastProviderStatus: callStatus, lastHangupCause: hangupCause }
+                : payload,
         };
 
         if (payload.CallUUID && payload.CallUUID !== existingCall.provider_call_uuid) {
@@ -141,7 +146,7 @@ export async function applyPlivoCallPayload(rawPayload = {}) {
             callUpdates.cost_status = "FINAL";
         }
 
-        if (TERMINAL_STATUSES.has(callStatus.toLowerCase()) && !existingCall.completed_at) {
+        if (TERMINAL_STATUSES.has(callStatus.toLowerCase()) && !existingCall.completed_at && !clickToCall) {
             callUpdates.completed_at = endTime ? new Date(endTime) : new Date();
         }
 
@@ -150,6 +155,7 @@ export async function applyPlivoCallPayload(rawPayload = {}) {
 
     const leadId = payload.leadId || payload.lead_id || existingCall?.lead_id;
     const isFinalState = TERMINAL_STATUSES.has(callStatus.toLowerCase());
+    const skipAutonomous = isClickToCallRecord(existingCall);
     if (leadId && orgId && isFinalState) {
         const lead = await Lead.findById(leadId, orgId);
         if (lead) {
@@ -164,18 +170,20 @@ export async function applyPlivoCallPayload(rawPayload = {}) {
                 );
             }
 
-            await OrchestratorService.handleOutcomeEvent(lead, normalized.normalizedOutcome, {
-                channel: "VOICE",
-                provider: "plivo",
-                callStatus,
-                callUuid,
-                callId: existingCall?.id,
-                duration: rawDuration,
-                transcript: speechResult,
-                disposition: normalized.disposition,
-                isAnswered: normalized.isAnswered,
-                rawPayload: payload,
-            }).catch((err) => console.error("[PlivoStatus] Outcome handling failed:", err.message));
+            if (!skipAutonomous) {
+                await OrchestratorService.handleOutcomeEvent(lead, normalized.normalizedOutcome, {
+                    channel: "VOICE",
+                    provider: "plivo",
+                    callStatus,
+                    callUuid,
+                    callId: existingCall?.id,
+                    duration: rawDuration,
+                    transcript: speechResult,
+                    disposition: normalized.disposition,
+                    isAnswered: normalized.isAnswered,
+                    rawPayload: payload,
+                }).catch((err) => console.error("[PlivoStatus] Outcome handling failed:", err.message));
+            }
 
             await eventBus.publish(normalized.isAnswered ? "CallCompleted" : "CallFailed", {
                 organization_id: orgId,

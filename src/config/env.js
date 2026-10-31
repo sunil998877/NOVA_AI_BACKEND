@@ -242,7 +242,7 @@ export const env = {
     novaSenderEmail: (process.env.NOVA_SENDER_EMAIL || "nova@yourdomain.com").replace(/^["']|["']$/g, "").trim(),
     novaSenderName: (process.env.NOVA_SENDER_NAME || "NOVA AI").replace(/^["']|["']$/g, "").trim(),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
-    publicApiUrl: (process.env.PUBLIC_API_URL || "").replace(/\/$/, ""),
+    publicApiUrl: (process.env.PUBLIC_API_URL || "").trim().replace(/\/$/, ""),
     youtubeApiKey: (process.env.YOUTUBE_API_KEY || "").trim(),
     instagramApiKey: (process.env.INSTAGRAM_API_KEY || process.env.RAPIDAPI_KEY || "").trim(),
     twitterBearerToken: (process.env.TWITTER_BEARER_TOKEN || "").trim(),

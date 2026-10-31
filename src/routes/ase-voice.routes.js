@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { authenticate, requireAseAdmin, requireAseRole } from "../middleware/auth.middleware.js";
-import { plivoWebhookAuth, agentflowWebhookAuth } from "../middleware/plivoAuth.middleware.js";
+import { plivoWebhookAuth, plivoXmlWebhookAuth, agentflowWebhookAuth } from "../middleware/plivoAuth.middleware.js";
 import {
     handlePlivoAnswer,
     handlePlivoStatus,
@@ -21,12 +21,22 @@ import {
     handleTransferPromise,
     handleTransferStatus,
 } from "../controllers/Ase/transfer.controller.js";
+import {
+    getClickToCallById,
+    handleClickToCallAnswer,
+    handleClickToCallDial,
+    handleClickToCallStatus,
+    startLeadClickToCall,
+} from "../controllers/Ase/clickToCall.controller.js";
 
 const router = Router();
 
 router.all("/plivo/answer", plivoWebhookAuth, handlePlivoAnswer);
 router.all("/plivo/status", plivoWebhookAuth, handlePlivoStatus);
 router.all("/plivo/agentflow", agentflowWebhookAuth, handleAgentflowOutcome);
+router.all("/plivo/click-to-call/answer", plivoXmlWebhookAuth, handleClickToCallAnswer);
+router.all("/plivo/click-to-call/status", plivoXmlWebhookAuth, handleClickToCallStatus);
+router.all("/plivo/click-to-call/dial", plivoXmlWebhookAuth, handleClickToCallDial);
 router.all("/plivo/transfer/bridge", plivoWebhookAuth, handleTransferBridge);
 router.all("/plivo/transfer/join", plivoWebhookAuth, handleTransferJoin);
 router.all("/plivo/transfer/promise", plivoWebhookAuth, handleTransferPromise);
@@ -36,6 +46,8 @@ router.get("/history", authenticate, requireAseRole, getCallHistory);
 router.get("/call/:id", authenticate, requireAseRole, getCallDetails);
 router.get("/config", authenticate, requireAseRole, getVoiceConfig);
 router.post("/dispatch", authenticate, requireAseRole, dispatchVoiceCall);
+router.post("/click-to-call", authenticate, requireAseRole, startLeadClickToCall);
+router.get("/call/:id/click-to-call", authenticate, requireAseRole, getClickToCallById);
 router.post("/call-lead", authenticate, requireAseRole, makeDirectCall);
 router.post("/call-number", authenticate, requireAseRole, makeDirectCall);
 router.post("/autonomous-call", authenticate, requireAseAdmin, triggerAutonomousCall);

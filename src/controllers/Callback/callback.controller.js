@@ -4,6 +4,15 @@ import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { eventBus } from "../../services/ase/eventBus.service.js";
 import { routeUnassignedHandoffs } from "../../services/ase/routingAssign.service.js";
+import {
+    getCallbackCallStatus,
+    notesForComplete,
+} from "../../services/ase/callbackCall.service.js";
+import { startCallbackQueueClickToCall } from "../../services/ase/callbackClickToCall.service.js";
+
+function httpError(err, res) {
+    return res.status(err.status || 500).json({ error: err.message });
+}
 
 export const listCallbacks = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
@@ -33,6 +42,55 @@ export const getCallback = asyncHandler(async (req, res) => {
     return res.status(200).json({ data: item });
 });
 
+export const startCallbackVoiceCall = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    try {
+        const result = await startCallbackQueueClickToCall(orgId, req.params.id, req.user, {
+            primaryPhone: req.body?.repPhone || req.body?.primaryPhone || "",
+        });
+        return res.status(200).json({
+            success: true,
+            data: {
+                callId: result.call?.id || null,
+                callbackId: Number(req.params.id),
+                humanPhone: result.humanPhone || result.primaryPhone,
+                leadPhone: result.leadPhone,
+                from: result.from,
+                reused: Boolean(result.reused),
+                status: result.session?.state || result.call?.provider_status || "calling_you",
+                mode: "click_to_call",
+            },
+        });
+    } catch (err) {
+        return httpError(err, res);
+    }
+});
+
+export const getCallbackVoiceCall = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    try {
+        const result = await getCallbackCallStatus(orgId, req.params.id);
+        return res.status(200).json({
+            success: true,
+            data: {
+                callId: result.call?.id || null,
+                callbackId: Number(req.params.id),
+                telHref: result.telHref,
+                status: result.status,
+                transcript: result.transcript,
+                notes: result.notes,
+                recordingUrl: result.recordingUrl,
+                suggestedOutcome: result.suggestedOutcome,
+                durationSec: result.durationSec,
+                isAnswered: result.isAnswered,
+                completed: result.completed,
+            },
+        });
+    } catch (err) {
+        return httpError(err, res);
+    }
+});
+
 export const updateCallback = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
     const existing = await Callback.findById(orgId, req.params.id);
@@ -52,6 +110,12 @@ export const updateCallback = asyncHandler(async (req, res) => {
     const isCompleting = req.body.status === "COMPLETED";
 
     if (isCompleting) {
+        const conversationNotes = await notesForComplete(orgId, existing.id, req.body.notes);
+        if (conversationNotes && !updates.notes) updates.notes = conversationNotes;
+        if (!updates.actual_outcome) {
+            const convo = await getCallbackCallStatus(orgId, existing.id).catch(() => null);
+            if (convo?.suggestedOutcome) updates.actual_outcome = convo.suggestedOutcome;
+        }
         updates.completed_at = new Date();
         const nowMs = Date.now();
         const dueMs = existing.due_at ? new Date(existing.due_at).getTime() : nowMs;

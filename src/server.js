@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config({ quiet: true });
+
 import dns from "dns";
 if (dns.setDefaultResultOrder) {
     dns.setDefaultResultOrder("ipv4first");

@@ -322,4 +322,51 @@ export const Call = {
         );
         return rows.map(mapCall);
     },
+
+    async findLatestByCallbackId(orgId, callbackId) {
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE organization_id = ? AND callback_id = ?
+             ORDER BY id DESC
+             LIMIT 1`,
+            [Number(orgId), Number(callbackId)]
+        );
+        return mapCall(rows[0]);
+    },
+
+    async findLatestByLead(orgId, leadId, { source = null } = {}) {
+        const params = [Number(orgId), Number(leadId)];
+        let sourceSql = "";
+        if (source) {
+            sourceSql = " AND initiation_source = ?";
+            params.push(source);
+        }
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE organization_id = ? AND lead_id = ?${sourceSql}
+             ORDER BY id DESC
+             LIMIT 1`,
+            params
+        );
+        return mapCall(rows[0]);
+    },
+
+    async findLatestOpenByLead(orgId, leadId, { source = null } = {}) {
+        const params = [Number(orgId), Number(leadId)];
+        let sourceSql = "";
+        if (source) {
+            sourceSql = " AND initiation_source = ?";
+            params.push(source);
+        }
+        const rows = await query(
+            `SELECT ${columns} FROM ${table}
+             WHERE organization_id = ? AND lead_id = ?${sourceSql}
+               AND completed_at IS NULL
+               AND provider_status IN ('initiated', 'ringing', 'in-progress', 'queued', 'unknown')
+             ORDER BY id DESC
+             LIMIT 1`,
+            params
+        );
+        return mapCall(rows[0]);
+    },
 };

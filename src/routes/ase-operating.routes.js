@@ -13,6 +13,7 @@ import {
     unholdLeadAction,
 } from "../controllers/Ase/approval.controller.js";
 import { getQueueStatus } from "../controllers/Ase/queue.controller.js";
+import { getClickToCallById, getLeadClickToCall, startLeadClickToCall } from "../controllers/Ase/clickToCall.controller.js";
 
 const router = Router();
 
@@ -26,6 +27,10 @@ router.post("/invites", authenticate, requireAseAdmin, createInvite);
 
 router.get("/presence", authenticate, requireAseRole, getAsePresence);
 router.post("/presence", authenticate, requireAseRole, setAsePresence);
+
+router.post("/leads/:leadId/call", authenticate, requireAseRole, startLeadClickToCall);
+router.get("/leads/:leadId/call", authenticate, requireAseRole, getLeadClickToCall);
+router.get("/calls/:callId", authenticate, requireAseRole, getClickToCallById);
 
 router.get("/approvals", authenticate, requireAseRole, listOrgApprovals);
 router.get("/approvals/lead/:leadId", authenticate, requireAseRole, getLeadPendingApproval);

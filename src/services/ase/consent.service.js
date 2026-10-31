@@ -61,7 +61,10 @@ export function consentFromIntake(explicit, flag, source) {
         });
     }
     if (flag === true) return buildConsentRecord({ status: CONSENT_STATUSES.GRANTED, source });
-    if (flag === false) return buildConsentRecord({ status: CONSENT_STATUSES.DENIED, source });
+    // Unchecked UI checkboxes send `false`. That means consent was not collected, not an opt-out.
+    if (flag === false || flag === 0 || flag === "0") {
+        return buildConsentRecord({ status: CONSENT_STATUSES.UNKNOWN, source });
+    }
     if (typeof flag === "string" && flag.trim()) {
         return buildConsentRecord({ status: flag, source });
     }
