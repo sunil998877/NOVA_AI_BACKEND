@@ -114,6 +114,25 @@ function redisFromUrl(raw) {
     };
 }
 
+function hostFromRedisUrl(raw) {
+    try {
+        return new URL(String(raw || "")).hostname || "";
+    } catch {
+        return "";
+    }
+}
+
+function localRedisConfig(port = 6379) {
+    return {
+        url: `redis://127.0.0.1:${Number(port) || 6379}`,
+        host: "127.0.0.1",
+        port: Number(port) || 6379,
+        username: "",
+        password: "",
+        tls: false,
+    };
+}
+
 export function resolveRedisConfig(source = process.env) {
     const publicUrl = String(source.REDIS_PUBLIC_URL || source.REDIS_EXTERNAL_URL || "").trim();
     const privateUrl = String(source.REDIS_URL || source.REDIS_PRIVATE_URL || "").trim();
@@ -123,6 +142,14 @@ export function resolveRedisConfig(source = process.env) {
     const password = String(source.REDIS_PASSWORD || source.REDISPASSWORD || "").trim();
     const publicHost = String(source.REDIS_PUBLIC_HOST || source.RAILWAY_TCP_PROXY_DOMAIN || "").trim();
     const publicPort = Number(source.REDIS_PUBLIC_PORT || source.RAILWAY_TCP_PROXY_PORT || 0);
+    const privateHost = hostFromRedisUrl(privateUrl) || host;
+
+    if (!isOnRailway(source) && (isLocalRedisFallbackHost(privateHost) || isLocalRedisFallbackHost(host))) {
+        const localPort = hostFromRedisUrl(privateUrl)
+            ? (redisFromUrl(privateUrl).port || port)
+            : port;
+        return localRedisConfig(localPort);
+    }
 
     let parsed = null;
     const publicLooksInternal = /\.railway\.internal/i.test(publicUrl);
@@ -154,8 +181,13 @@ export function resolveRedisConfig(source = process.env) {
         return { url: "", host: "", port: 6379, username: "", password: "", tls: false };
     }
 
-    if (!parsed.username && username) parsed.username = username;
-    if (!parsed.password && password) parsed.password = password;
+    if (!isLocalRedisFallbackHost(parsed.host)) {
+        if (!parsed.username && username) parsed.username = username;
+        if (!parsed.password && password) parsed.password = password;
+    } else {
+        parsed.username = "";
+        parsed.password = "";
+    }
 
     if (!isOnRailway(source) && !isReachableRedisHost(parsed.host, source) && publicHost && isReachableRedisHost(publicHost, source)) {
         parsed.host = publicHost;
@@ -174,15 +206,7 @@ export function resolveRedisConfig(source = process.env) {
     }
 
     if (!isOnRailway(source) && !isReachableRedisHost(parsed.host, source) && !isLocalRedisFallbackHost(parsed.host)) {
-        return {
-            url: "redis://127.0.0.1:6379",
-            host: "127.0.0.1",
-            port: 6379,
-            username: "",
-            password: "",
-            tls: false,
-            fallbackFromInternal: true,
-        };
+        return { ...localRedisConfig(6379), fallbackFromInternal: true };
     }
 
     return parsed;

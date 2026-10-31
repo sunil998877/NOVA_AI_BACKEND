@@ -168,7 +168,7 @@ export const OrchestratorService = {
             return;
         }
 
-        if (rawData.skipNextActionSchedule) {
+        if (rawData.skipNextActionSchedule || String(lead.next_action || "").toUpperCase() === "CADENCE") {
             return;
         }
 

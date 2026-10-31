@@ -1,10 +1,10 @@
 {
   "model_name": "nova_brain_lead_next_action",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "framework": "onnx-neural-network",
   "feature_schema_version": "v2.0",
   "normalization": "clip_divide_by_scale",
-  "accuracy": 0.7312,
+  "accuracy": 0.7198,
   "total_samples": 4800,
   "test_samples": 960,
   "features": [
@@ -42,11 +42,11 @@
   },
   "architecture": "12-32-16-3",
   "metrics": {
-    "accuracy": 0.7312,
-    "macro_f1": 0.7253,
-    "weighted_f1": 0.7316
+    "accuracy": 0.7198,
+    "macro_f1": 0.7163,
+    "weighted_f1": 0.7193
   },
-  "data_source": "synthetic_teacher",
+  "data_source": "real_leads_mixed",
   "decision_policy": "expected_utility_with_compliance_gate",
-  "updated_at": "2026-10-26T07:44:28.746086+00:00"
+  "updated_at": "2026-10-31T03:53:34.111887+00:00"
 }

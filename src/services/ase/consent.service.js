@@ -71,6 +71,24 @@ export function consentFromIntake(explicit, flag, source) {
     return buildConsentRecord({ status: CONSENT_STATUSES.UNKNOWN, source });
 }
 
+const IMPLICIT_GRANT_SOURCES = new Set(["MANUAL", "CSV", "CSV_IMPORT", "API", "CRM_HUBSPOT"]);
+
+export function applyImplicitChannelConsent(consent, { hasChannel = false, source = "", flag } = {}) {
+    if (!hasChannel || !consent) return consent;
+    if (consent.status === CONSENT_STATUSES.GRANTED || consent.status === CONSENT_STATUSES.DENIED) {
+        return consent;
+    }
+    if (flag === false || flag === 0 || flag === "0") return consent;
+    const src = String(source || "").toUpperCase();
+    if (!IMPLICIT_GRANT_SOURCES.has(src)) return consent;
+    return buildConsentRecord({
+        status: CONSENT_STATUSES.GRANTED,
+        source: source || consent.source,
+        timestamp: consent.timestamp,
+        actorUserId: consent.actor_user_id,
+    });
+}
+
 export function isConsentGranted(consent) {
     if (!consent) return false;
     const status = typeof consent === "string" ? consent : consent.status;

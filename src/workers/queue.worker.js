@@ -13,6 +13,7 @@ import { processCompanyResearchJob } from "../services/queue/processors/companyR
 import { processEmailPersonalizationJob } from "../services/queue/processors/emailPersonalization.processor.js";
 import { processFollowUpJob } from "../services/queue/processors/followUp.processor.js";
 import { processAseActionJob } from "../services/queue/processors/aseAction.processor.js";
+import { processCadenceStepJob } from "../services/queue/processors/cadenceStep.processor.js";
 
 let shuttingDown = false;
 
@@ -27,6 +28,7 @@ export function startQueueWorkers() {
         createQueueWorker(QUEUE_NAMES.EMAIL_PERSONALIZATION, processEmailPersonalizationJob),
         createQueueWorker(QUEUE_NAMES.FOLLOW_UP, processFollowUpJob),
         createQueueWorker(QUEUE_NAMES.ASE_ACTIONS, processAseActionJob),
+        createQueueWorker(QUEUE_NAMES.ASE_CADENCE, processCadenceStepJob),
     ].filter(Boolean);
     console.log(`[QueueWorker] started ${started.length} workers`);
     return started;

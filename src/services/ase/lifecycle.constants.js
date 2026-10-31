@@ -20,6 +20,7 @@ export const LEGAL_NEXT_ACTIONS = Object.freeze([
     "CALL",
     "WAIT",
     "REP_CALLBACK",
+    "CADENCE",
 ]);
 
 export const ILLEGAL_STATUS = "ATTEMPTED";

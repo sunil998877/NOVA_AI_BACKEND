@@ -203,6 +203,18 @@ async function applyPolicyAfter(lead, {
     return { closed: terminal, pooled: nextStatus === ASE_STATES.RE_ENGAGEMENT_POOL, lead: updated, status: nextStatus };
 }
 
+export async function applyCadenceClose(lead, { closeOutcome = "NURTURE", reason = "Cadence finished without engagement" } = {}) {
+    if (!lead?.id || isOutreachStopped(lead)) return { applied: false, lead };
+    const policy = closeOutcome === "CLOSED_LOST" ? AFTER_NO_RESPONSE.CLOSED_LOST : AFTER_NO_RESPONSE.RE_ENGAGEMENT_POOL;
+    const result = await applyPolicyAfter(lead, {
+        firstEvent: "NO_RESPONSE",
+        policy,
+        reason,
+        eventType: policy === AFTER_NO_RESPONSE.RE_ENGAGEMENT_POOL ? "LIFECYCLE_RE_ENGAGE" : "LIFECYCLE_NO_RESPONSE",
+    });
+    return { applied: true, ...result };
+}
+
 export async function applyCapsExhaust(lead, config) {
     const cfg = config || await getLifecycleConfig(lead.organization_id);
     const caps = evaluateCapsExhaust(lead, cfg);

@@ -21,11 +21,17 @@ export const nextBestActionService = {
             };
         }
 
-        let baselineAction = candidateActions.includes("EMAIL") && features.emailAttempts === 0
-            ? "EMAIL"
-            : candidateActions[0];
+        const emailAttempts = Number(features.emailAttempts || 0);
+        const voiceAttempts = Number(features.voiceAttempts || 0);
+        const untouched = emailAttempts === 0 && voiceAttempts === 0;
+        const canCallFirst = candidateActions.includes("CALL") && features.voiceConsentAllowed;
 
-        if (features.voiceAttempts < 2 && features.voiceConsentAllowed && features.emailAttempts > features.voiceAttempts) {
+        // Cadence policy: first touch is a call when the lead can be dialed. Email waits for a miss.
+        let baselineAction = untouched && canCallFirst
+            ? "CALL"
+            : (candidateActions.includes("EMAIL") && emailAttempts === 0 ? "EMAIL" : candidateActions[0]);
+
+        if (voiceAttempts < 2 && features.voiceConsentAllowed && emailAttempts > voiceAttempts) {
             if (candidateActions.includes("CALL")) baselineAction = "CALL";
         }
 
@@ -41,13 +47,28 @@ export const nextBestActionService = {
         if (prediction?.available) {
             if (status.mode === "ACTIVE") {
                 if (predictedAction !== "WAIT" && candidateActions.includes(predictedAction)) {
-                    finalAction = predictedAction;
-                    isAssistedByMl = true;
-                    reasonCode = prediction.reason_code || "ML_POLICY_OPTIMIZATION";
+                    if (untouched && predictedAction === "EMAIL" && canCallFirst) {
+                        finalAction = "CALL";
+                        isAssistedByMl = false;
+                        reasonCode = "CALL_FIRST_CADENCE";
+                    } else {
+                        finalAction = predictedAction;
+                        isAssistedByMl = true;
+                        reasonCode = prediction.reason_code || "ML_POLICY_OPTIMIZATION";
+                    }
                 } else if (predictedAction === "WAIT") {
-                    if (features.emailAttempts === 0 && features.voiceAttempts === 0) {
+                    if (untouched) {
                         finalAction = baselineAction;
                         isAssistedByMl = false;
+                    } else if (
+                        candidateActions.includes("CALL")
+                        && features.voiceConsentAllowed
+                        && Number(features.voiceAttempts || 0) === 0
+                        && Number(features.emailAttempts || 0) >= 1
+                    ) {
+                        finalAction = "CALL";
+                        isAssistedByMl = false;
+                        reasonCode = "POST_EMAIL_FIRST_CALL";
                     } else {
                         finalAction = null;
                         isAssistedByMl = true;

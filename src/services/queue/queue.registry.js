@@ -30,12 +30,19 @@ export function getQueue(name) {
     return queue;
 }
 
+export function toQueueJobId(rawId) {
+    if (rawId === undefined || rawId === null || rawId === "") return undefined;
+    const id = String(rawId).replace(/:/g, "-");
+    return /^\d+$/.test(id) ? `job-${id}` : id;
+}
+
 export async function addQueueJob(name, jobName, data, options = {}) {
     const queue = getQueue(name);
     if (!queue) return null;
+    const jobId = toQueueJobId(options.jobId);
     try {
         const job = await queue.add(jobName, data, {
-            jobId: options.jobId,
+            jobId,
             delay: options.delay || 0,
             attempts: options.attempts || DEFAULT_JOB_OPTIONS.attempts,
             backoff: options.backoff || DEFAULT_JOB_OPTIONS.backoff,
@@ -45,7 +52,7 @@ export async function addQueueJob(name, jobName, data, options = {}) {
         return { id: job.id, queue: name, name: jobName };
     } catch (error) {
         if (String(error.message || "").includes("Job is already")) {
-            return { id: options.jobId, queue: name, name: jobName, duplicate: true };
+            return { id: jobId, queue: name, name: jobName, duplicate: true };
         }
         console.error("[Queue] enqueue failed:", error.message);
         return null;

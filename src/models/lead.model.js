@@ -1,6 +1,7 @@
 import { execute, query } from "../config/db.js";
 import { leadSchema } from "../schema/lead.schema.js";
 import { mapRow } from "./mapRow.js";
+import { phoneDigitKeys, phoneLookupKeys } from "../services/leads/phoneNumber.service.js";
 
 const { table, columns, updatable } = leadSchema;
 const UPDATABLE = new Set(updatable);
@@ -167,11 +168,25 @@ export const Lead = {
 
     async findByPhone(orgId, phone) {
         if (!phone) return null;
-        const cleaned = String(phone).replace(/[^\d+]/g, "").trim();
-        if (!cleaned) return null;
+        const keys = phoneLookupKeys(phone);
+        if (!keys.length) return null;
+        const placeholders = keys.map(() => "?").join(", ");
+        const digitKeys = phoneDigitKeys(phone);
+        const suffixSql = digitKeys.map(() =>
+            " OR RIGHT(REPLACE(COALESCE(phone_e164, phone), '+', ''), ?) = ?"
+        ).join("");
+        const suffixParams = digitKeys.flatMap((key) => [key.length, key]);
         const rows = await query(
-            `SELECT ${columns} FROM ${table} WHERE organization_id = ? AND phone = ? LIMIT 1`,
-            [orgId, cleaned]
+            `SELECT ${columns} FROM ${table}
+             WHERE organization_id = ?
+               AND (
+                    phone IN (${placeholders})
+                    OR phone_e164 IN (${placeholders})
+                    OR phone_original IN (${placeholders})
+                    ${suffixSql}
+               )
+             LIMIT 1`,
+            [orgId, ...keys, ...keys, ...keys, ...suffixParams]
         );
         return toLead(rows[0]);
     },
@@ -272,6 +287,7 @@ export const Lead = {
             `SELECT ${columns} FROM ${table}
              WHERE (status = 'NEW' OR (status = 'QUEUED' AND next_action_time IS NULL))
                AND do_not_contact = 0
+               AND (next_action IS NULL OR next_action <> 'CADENCE')
                AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC', 'ATTEMPTED')
              ORDER BY priority DESC, created_at ASC
              LIMIT ?`,
@@ -286,7 +302,7 @@ export const Lead = {
              WHERE do_not_contact = 0
                AND status NOT IN ('CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC')
                AND (status = 'ATTEMPTED' OR next_action = 'ATTEMPTED'
-                    OR (next_action IS NOT NULL AND next_action NOT IN ('EMAIL', 'CALL', 'WAIT', 'REP_CALLBACK')))
+                    OR (next_action IS NOT NULL AND next_action NOT IN ('EMAIL', 'CALL', 'WAIT', 'REP_CALLBACK', 'CADENCE')))
              ORDER BY updated_at ASC
              LIMIT ?`,
             [Number(limit) || 20]
@@ -303,7 +319,7 @@ export const Lead = {
                     'CLOSED_WON', 'CLOSED_LOST', 'CLOSED_UNQUALIFIED', 'SUPPRESSED_DNC',
                     'INTERESTED', 'CALLBACK_SCHEDULED', 'WARM_TRANSFER', 'HANDED_OFF'
                )
-               AND (next_action IS NULL OR next_action <> 'REP_CALLBACK')
+               AND (next_action IS NULL OR next_action NOT IN ('REP_CALLBACK', 'CADENCE'))
                AND (
                     (last_contacted_at IS NOT NULL AND last_contacted_at <= ?)
                     OR (last_contacted_at IS NULL AND created_at <= ?)
@@ -322,12 +338,13 @@ export const Lead = {
         const result = await execute(
             `INSERT INTO ${table} (
                 organization_id, user_id, name, first_name, last_name, email,
-                company, phone, whatsapp_number, tags, source, external_id,
+                company, phone, phone_e164, phone_original, phone_country, phone_calling_code, phone_validation,
+                whatsapp_number, tags, source, external_id,
                 segment_attributes, priority, status, email_consent, voice_consent,
                 whatsapp_consent, assigned_rep_id, next_action, next_action_time,
                 last_contacted_at, attempt_counters, callback_due, disposition,
                 do_not_contact, health, metadata, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 orgId,
                 data.userId ?? data.user_id ?? null,
@@ -337,6 +354,11 @@ export const Lead = {
                 String(data.email).toLowerCase().trim(),
                 data.company ?? null,
                 data.phone ?? null,
+                data.phone_e164 ?? data.phone ?? null,
+                data.phone_original ?? null,
+                data.phone_country ?? null,
+                data.phone_calling_code ?? null,
+                data.phone_validation ?? null,
                 data.whatsapp_number ?? null,
                 serialize("tags", data.tags || []),
                 data.source || "API",

@@ -1,6 +1,6 @@
 import { getOpenAiClient } from "../../controllers/OpenAI/client.js";
 import { env } from "../../config/env.js";
-import { heuristicResearch, loadCompanyContext, rememberCompanyResearch, researchCompany } from "./companyResearch.service.js";
+import { heuristicResearch, isUsableResearchProfile, loadCompanyContext, rememberCompanyResearch, researchCompany } from "./companyResearch.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { bodyToHtml, formatFirstName, sanitizeOutreachEmail } from "../../utils/outreachEmail.js";
@@ -65,7 +65,14 @@ Return JSON with subject, text, and html. Subject under 10 words. Body under 140
 
 export async function draftCompanyPersonalizedEmail(lead, options = {}) {
     const playbookEmail = await tryPlaybookEmail(lead, options.emailType || EMAIL_TYPES.INITIAL);
-    if (playbookEmail) return playbookEmail;
+    if (playbookEmail) {
+        // The playbook describes the seller; the lead's company_research must describe the lead.
+        const known = readMetadata(lead).company_research;
+        const research = isUsableResearchProfile(known)
+            ? known
+            : await researchCompany(lead.company || "", { domain: lead.email?.split("@")[1] || null, leadInfo: lead }).catch(() => null);
+        return { ...playbookEmail, research };
+    }
 
     const rawCompany = lead.company || "";
     const emailDomain = lead.email ? lead.email.split("@")[1] : "";
@@ -192,7 +199,7 @@ export async function prepareCompanyOutreach(lead) {
     const drafted = await draftCompanyPersonalizedEmail(lead);
     const metadata = {
         ...existing,
-        company_research: drafted.research,
+        company_research: drafted.research || existing.company_research || null,
         outreach_status: "ready",
         outreach_email: {
             subject: drafted.subject,

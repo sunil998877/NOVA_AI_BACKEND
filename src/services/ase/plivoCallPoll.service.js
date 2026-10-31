@@ -1,6 +1,7 @@
 import { Call } from "../../models/call.model.js";
 import { plivoVoiceAdapter } from "./adapters/plivoVoice.adapter.js";
 import { applyPlivoCallPayload } from "./voiceOutcomeApply.service.js";
+import { applyClickToCallProviderStatus, isClickToCallRecord } from "./clickToCall.service.js";
 
 const POLL_DELAYS_MS = [8000, 20000, 45000, 90000, 150000];
 
@@ -102,8 +103,10 @@ export async function syncPlivoCall(call) {
         callId: call.id,
     });
 
-    const applied = await applyPlivoCallPayload(payload);
-    if (applied?.status === "received") {
+    const applied = isClickToCallRecord(call)
+        ? await applyClickToCallProviderStatus({ ...payload, callId: call.id })
+        : await applyPlivoCallPayload(payload);
+    if (applied?.session || applied?.status === "received") {
         console.log(`[ASE][Plivo] Polled uuid=${payload.CallUUID} status=${payload.CallStatus} duration=${payload.Duration}s call=${call.id}`);
     }
     return applied;

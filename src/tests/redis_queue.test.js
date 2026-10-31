@@ -28,6 +28,22 @@ test("builds Redis config from split Railway credentials", () => {
     assert.match(redis.url, /redis:\/\/default:secret-pass@redis.example.com:6379/);
 });
 
+test("local REDIS_URL wins over REDIS_PUBLIC_URL and drops railway password", () => {
+    const redis = resolveRedisConfig({
+        REDIS_URL: "redis://127.0.0.1:6379",
+        REDIS_HOST: "127.0.0.1",
+        REDIS_PORT: "6379",
+        REDIS_USER: "default",
+        REDIS_PASSWORD: "railway-secret",
+        REDIS_PUBLIC_URL: "redis://default:railway-secret@hopper.proxy.rlwy.net:23968",
+    });
+    assert.equal(redis.host, "127.0.0.1");
+    assert.equal(redis.port, 6379);
+    assert.equal(redis.password, "");
+    assert.equal(redis.username, "");
+    assert.equal(redis.url, "redis://127.0.0.1:6379");
+});
+
 test("local machines prefer REDIS_PUBLIC_URL over railway.internal", () => {
     const redis = resolveRedisConfig({
         REDIS_URL: "redis://default:secret@redis.railway.internal:6379",
@@ -61,7 +77,7 @@ test("queue names and job ids stay stable", () => {
     assert.equal(JOB_NAMES.RESEARCH_COMPANY, "research_company");
     assert.equal(CACHE_KEYS.RESEARCH("acme.com"), "company:research:acme.com");
     assert.equal(CACHE_KEYS.PROFILE(1, "acme"), "company:profile:1:acme");
-    assert.equal(RESEARCH_CACHE_SCHEMA, 1);
+    assert.equal(RESEARCH_CACHE_SCHEMA, 2);
 });
 
 test("cache miss is safe when Redis is down", async () => {

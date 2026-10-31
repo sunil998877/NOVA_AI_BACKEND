@@ -296,10 +296,27 @@ export const Call = {
             `SELECT COUNT(*) AS total FROM ${table}
              WHERE organization_id = ?
                AND completed_at IS NULL
-               AND provider_status IN ('initiated', 'ringing', 'in-progress', 'queued', 'unknown')`,
+               AND provider_status IN ('initiated', 'ringing', 'in-progress', 'queued', 'unknown')
+               AND created_at >= DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
             [Number(orgId || 1)]
         );
         return Number(rows?.[0]?.total || 0);
+    },
+
+    async expireStaleOpenCalls({ olderThanHours = 2 } = {}) {
+        const hours = Math.max(1, Number(olderThanHours) || 2);
+        const result = await execute(
+            `UPDATE ${table}
+             SET provider_status = 'timeout',
+                 normalized_outcome = 'FAILED',
+                 failure_reason = 'Stale open call with no provider completion',
+                 completed_at = UTC_TIMESTAMP()
+             WHERE completed_at IS NULL
+               AND provider_status IN ('initiated', 'ringing', 'queued', 'unknown', 'in-progress')
+               AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? HOUR)`,
+            [hours]
+        );
+        return Number(result?.affectedRows || 0);
     },
 
     async findOpenForPoll({ olderThanSec = 8, newerThanHours = 8, limit = 20 } = {}) {

@@ -5,6 +5,7 @@ import { TelephonyWebhookEvent } from "../../models/telephony-webhook-event.mode
 import { eventBus } from "./eventBus.service.js";
 import { normalizeTelephonyOutcome, extractCallTranscript } from "./outcomeNormalizer.service.js";
 import { isClickToCallRecord, parseCallMeta } from "./clickToCall.service.js";
+import { handleCallEvent, isCadenceCall } from "./cadence/cadence.service.js";
 
 const TERMINAL_STATUSES = new Set([
     "completed",
@@ -156,6 +157,11 @@ export async function applyPlivoCallPayload(rawPayload = {}) {
     const leadId = payload.leadId || payload.lead_id || existingCall?.lead_id;
     const isFinalState = TERMINAL_STATUSES.has(callStatus.toLowerCase());
     const skipAutonomous = isClickToCallRecord(existingCall);
+    const cadenceCall = !skipAutonomous && orgId ? await isCadenceCall(orgId, existingCall).catch(() => false) : false;
+    if (cadenceCall && !isFinalState) {
+        await handleCallEvent({ orgId, call: existingCall, callStatus, normalized, hangupCause, duration: rawDuration, isFinal: false })
+            .catch((err) => console.error("[PlivoStatus] Cadence progress update failed:", err.message));
+    }
     if (leadId && orgId && isFinalState) {
         const lead = await Lead.findById(leadId, orgId);
         if (lead) {
@@ -182,7 +188,13 @@ export async function applyPlivoCallPayload(rawPayload = {}) {
                     disposition: normalized.disposition,
                     isAnswered: normalized.isAnswered,
                     rawPayload: payload,
+                    skipNextActionSchedule: cadenceCall,
                 }).catch((err) => console.error("[PlivoStatus] Outcome handling failed:", err.message));
+            }
+
+            if (cadenceCall) {
+                await handleCallEvent({ orgId, call: existingCall, callStatus, normalized, hangupCause, duration: rawDuration, isFinal: true })
+                    .catch((err) => console.error("[PlivoStatus] Cadence outcome handling failed:", err.message));
             }
 
             await eventBus.publish(normalized.isAnswered ? "CallCompleted" : "CallFailed", {

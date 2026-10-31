@@ -28,6 +28,7 @@ import { aseApprovalSchema } from "./ase-approval.schema.js";
 import { consentEventSchema } from "./consent-event.schema.js";
 import { orgInviteSchema } from "./org-invite.schema.js";
 import { leadImportJobSchema } from "./lead-import-job.schema.js";
+import { aseCadencePolicySchema, aseCadenceEnrollmentSchema, aseCadenceStepSchema } from "./ase-cadence.schema.js";
 
 export const schemas = [
     organizationSchema,
@@ -63,6 +64,9 @@ export const schemas = [
     consentEventSchema,
     orgInviteSchema,
     leadImportJobSchema,
+    aseCadencePolicySchema,
+    aseCadenceEnrollmentSchema,
+    aseCadenceStepSchema,
 ];
 
 export const tableStatements = schemas.map((schema) => schema.createTable);
@@ -90,4 +94,7 @@ export {
     consentEventSchema,
     orgInviteSchema,
     leadImportJobSchema,
+    aseCadencePolicySchema,
+    aseCadenceEnrollmentSchema,
+    aseCadenceStepSchema,
 };

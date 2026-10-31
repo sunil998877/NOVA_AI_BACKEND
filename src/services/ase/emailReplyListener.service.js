@@ -12,6 +12,7 @@ import { classifyInteractionIntent } from "./brain/intentClassification.service.
 import { getIo } from "../../socket/socketServer.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
 import { haltOutreachForLead } from "./outreachHalt.service.js";
+import { withCycleLock } from "../queue/cache.service.js";
 
 function extractCleanReply(text) {
     if (!text) return "";
@@ -135,8 +136,8 @@ class EmailReplyListenerService {
         this.timer = setTimeout(async () => {
             let hadError = false;
             try {
-                const res = await this.pollInbox();
-                hadError = !res?.success;
+                const res = await withCycleLock("imap-reply-poll", 5 * 60 * 1000, () => this.pollInbox());
+                hadError = !res?.lockHeld && !res?.success;
             } catch {
                 hadError = true;
             } finally {

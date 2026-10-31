@@ -4,6 +4,7 @@ import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { Callback } from "../../models/callback.model.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
+import { stopCadenceForLead } from "./cadence/cadenceHalt.js";
 
 export async function haltOutreachForLead(orgId, leadId, reason = "Do not contact") {
     const id = Number(leadId);
@@ -15,6 +16,7 @@ export async function haltOutreachForLead(orgId, leadId, reason = "Do not contac
         AseApproval.cancelPendingForLead(org, id, reason).catch(() => 0),
         Callback.cancelOpenForLead(org, id, reason).catch(() => 0),
         followUpEngine.handleSuppression(id, org, reason).catch(() => null),
+        stopCadenceForLead(org, id, reason).catch(() => null),
         Lead.updateById(id, { next_action: null, next_action_time: null }, org).catch(() => null),
     ]);
 

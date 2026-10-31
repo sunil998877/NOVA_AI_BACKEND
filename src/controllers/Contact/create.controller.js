@@ -14,6 +14,7 @@ export const createContact = asyncHandler(async (req, res) => {
     if (!emailRegex.test(String(email).trim())) {
         return res.status(400).json({ error: "Invalid email format" });
     }
+    
 
     const contact = await Contact.upsert({
         name: String(name).trim(),

@@ -30,7 +30,7 @@ test("heading is Next Best Action: Email when the model says Email even if store
     assert.equal(card.rightWinner, "EMAIL");
     assert.equal(card.actionIsWait, false);
     assert.match(card.waitLine, /Wait until/i);
-    assert.match(card.subline, /Day 2 follow-up/);
+    assert.match(card.subline, /Follow-up email/);
     assert.equal(nbaNeverSaysWaitWhenModelSaysEmail(card), true);
     assert.equal(/wait/i.test(card.heading), false);
 });
@@ -84,4 +84,40 @@ test("Wait until formats weekday time IST", () => {
     const line = formatWaitUntil("2026-10-28T11:50:00.000Z", "Asia/Kolkata", now);
     assert.match(line, /Wait until/);
     assert.match(line, /IST/);
+});
+
+test("CALL-first lead shows First call, not First email", () => {
+    const card = presentNba({
+        lead: {
+            phone: "+919876543210",
+            email: "ops@acme.com",
+            next_action: "CALL",
+            next_action_time: future,
+            timezone: "Asia/Kolkata",
+            attempt_counters: { email: 0, voice: 0 },
+        },
+        decision: { action: "CALL" },
+        now,
+    });
+    assert.equal(card.channel, "CALL");
+    assert.equal(card.heading, "Next Best Action: Call");
+    assert.equal(card.cadenceStep, "First call");
+    assert.match(card.subline, /First call/);
+    assert.doesNotMatch(card.subline, /First email/i);
+});
+
+test("CADENCE stored action with phone presents Call, not Email", () => {
+    const card = presentNba({
+        lead: {
+            phone: "+919876543210",
+            email: "ops@acme.com",
+            next_action: "CADENCE",
+            next_action_time: future,
+            attempt_counters: { email: 0, voice: 0 },
+        },
+        decision: { action: "WAIT" },
+        now,
+    });
+    assert.equal(card.channel, "CALL");
+    assert.equal(card.cadenceStep, "First call");
 });

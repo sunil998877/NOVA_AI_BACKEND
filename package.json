@@ -8,7 +8,7 @@
   "main": "src/server.js",
   "scripts": {
     "build": "node --check src/server.js",
-    "test": "node --test --test-concurrency=1",
+    "test": "node scripts/run-tests.js unit",
     "check": "node --check src/server.js",
     "start": "node src/server.js",
     "worker": "node src/workers/queue.worker.js",
@@ -17,7 +17,9 @@
     "ml:train": "python ml_service/train_heads.py",
     "ml:serve": "python -m uvicorn ml_service.main:app --host 127.0.0.1 --port 8091",
     "dev": "nodemon --exec node src/server.js",
-    "tunnel": "ngrok http 3001"
+    "tunnel": "ngrok http 3001",
+    "test:live": "node scripts/run-tests.js live",
+    "test:all": "node scripts/run-tests.js all"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^2.1.0",
@@ -32,13 +34,13 @@
     "ioredis": "^6.0.0",
     "json5": "^2.2.3",
     "jsonwebtoken": "^9.0.3",
+    "libphonenumber-js": "^1.13.15",
     "mailparser": "^3.9.40",
     "marked": "^18.0.11",
     "mysql2": "^3.24.2",
     "nodemailer": "^10.1.7",
     "onnxruntime-node": "^1.30.0",
     "openai": "^7.5.0",
-    "redis": "^6.3.0",
     "socket.io": "^4.8.3",
     "uuid": "^14.0.2",
     "xstate": "^5.33.2"

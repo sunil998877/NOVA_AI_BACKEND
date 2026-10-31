@@ -432,7 +432,7 @@ export async function tryPlaybookEmail(lead, type = EMAIL_TYPES.INITIAL) {
             subject: rendered.subject,
             text: rendered.text,
             html: rendered.html,
-            research: {
+            sellerContext: {
                 company: playbook.companyName || playbook.brandName,
                 summary: playbook.companyDescription,
                 coreServices: playbook.productName || playbook.productDescription,

@@ -21,6 +21,51 @@ import { applyLeadHealth } from "./lifecycleClose.service.js";
 import { jobQueue } from "./jobQueue.service.js";
 import { pollOpenPlivoCalls, schedulePlivoCallSync } from "./plivoCallPoll.service.js";
 import { env } from "../../config/env.js";
+import { recoverDueSteps, enrollLead, executeStep } from "./cadence/cadence.service.js";
+import { withCycleLock } from "../queue/cache.service.js";
+import { isConsentGranted } from "./consent.service.js";
+
+const SCHEDULER_LOCK_TTL_MS = 2 * 60 * 1000;
+
+function voiceGranted(lead) {
+    return isConsentGranted(lead?.voice_consent);
+}
+
+function isUntouched(lead) {
+    const counters = lead?.attempt_counters || {};
+    return Number(counters.email || 0) === 0 && Number(counters.voice || 0) === 0;
+}
+
+async function startCallFirstCadence(lead) {
+    if (!lead?.id || !lead.phone || !voiceGranted(lead) || !isUntouched(lead)) {
+        return { handled: false };
+    }
+    const orgId = Number(lead.organization_id || 1);
+    try {
+        const result = await enrollLead(orgId, lead.id, { startNow: true, confirmReview: false });
+        if (result.enrolled) {
+            const first = result.steps?.[0];
+            if (first && new Date(first.due_at).getTime() <= Date.now() + 1000) {
+                executeStep(orgId, first.id, { source: "scheduler" }).catch((err) => {
+                    console.warn(`[ASE Scheduler] Cadence first step ${first.id} failed:`, err.message);
+                });
+            }
+            return { handled: true, enrolled: true };
+        }
+        if (result.reason === "ALREADY_ENROLLED") return { handled: true, enrolled: true };
+        if (result.reason === "CONFIRMATION_REQUIRED") {
+            await Lead.updateById(lead.id, {
+                next_action: "WAIT",
+                next_action_time: new Date(Date.now() + 60 * 60 * 1000),
+            }, orgId);
+            return { handled: true, enrolled: false };
+        }
+    } catch (err) {
+        if (err.status === 409 && /suppressed/i.test(err.message || "")) return { handled: true };
+        console.warn(`[ASE Scheduler] Call-first cadence for lead ${lead.id} skipped:`, err.message);
+    }
+    return { handled: false };
+}
 
 class AseScheduler {
     constructor() {
@@ -71,14 +116,7 @@ class AseScheduler {
             this.timer = null;
         }
         try {
-            await this.autoQueueNewLeads();
-            await applyLifecycleSweep(20).catch(() => {});
-            await this.executeDueActions();
-            await this.checkOverdueCallbacks();
-            await followUpScheduler.processDueTasks().catch(() => {});
-            await pollOpenPlivoCalls().catch((err) => {
-                console.warn("[ASE Scheduler] Plivo call poll failed:", err.message);
-            });
+            await withCycleLock("ase-scheduler-cycle", SCHEDULER_LOCK_TTL_MS, () => this.runCycle());
         } catch (error) {
             console.error("[ASE Scheduler] Error during cycle:", error.message);
         } finally {
@@ -93,6 +131,24 @@ class AseScheduler {
         }
     }
 
+    async runCycle() {
+        const stale = await Call.expireStaleOpenCalls({ olderThanHours: 2 }).catch(() => 0);
+        if (stale > 0) {
+            console.warn(`[ASE Scheduler] Closed ${stale} stale open call(s) with no provider completion`);
+        }
+        await this.autoQueueNewLeads();
+        await applyLifecycleSweep(20).catch(() => {});
+        await this.executeDueActions();
+        await recoverDueSteps({ limit: Number(process.env.ASE_CADENCE_SWEEP_LIMIT || 200) }).catch((err) => {
+            console.warn("[ASE Scheduler] Cadence sweep failed:", err.message);
+        });
+        await this.checkOverdueCallbacks();
+        await followUpScheduler.processDueTasks().catch(() => {});
+        await pollOpenPlivoCalls().catch((err) => {
+            console.warn("[ASE Scheduler] Plivo call poll failed:", err.message);
+        });
+    }
+
     async autoQueueNewLeads() {
         try {
             const unscheduled = await Lead.findUnscheduledNew(10);
@@ -100,6 +156,8 @@ class AseScheduler {
                 if (lead?.metadata?.outreach_hold?.held) continue;
                 if (isCompanyResearchPending(lead)) continue;
                 const orgId = Number(lead.organization_id || 1);
+                const cadence = await startCallFirstCadence(lead);
+                if (cadence.handled) continue;
                 const decision = await OrchestratorService.evaluateNextAction(lead);
                 if (decision && decision.action) {
                     let action = decision.action;
@@ -162,6 +220,13 @@ class AseScheduler {
 
         if (!workingLead || workingLead.next_action !== action) {
             return { executed: false, reason: "Lead missing or action changed" };
+        }
+
+        if (action === "EMAIL") {
+            const rerouted = await startCallFirstCadence(workingLead);
+            if (rerouted.handled) {
+                return { executed: false, reason: "Rerouted first touch to call cadence" };
+            }
         }
 
         const held = Boolean(workingLead?.metadata?.outreach_hold?.held);
@@ -391,14 +456,19 @@ class AseScheduler {
                 const stateTransition = transitionLeadState(workingLead.status, "CALL_INITIATED");
                 const nextStatus = stateTransition.nextState;
 
+                const voiceCap = Number(currentCounters.voice || 0) >= 2;
+                const emailLeft = Number(currentCounters.email || 0) < 3 && Boolean(workingLead.email);
+                const parkedAction = voiceCap && emailLeft ? "EMAIL" : "WAIT";
+                const parkedAt = new Date(Date.now() + (parkedAction === "EMAIL" ? 2 * 60 * 60 * 1000 : 15 * 60 * 1000));
+
                 await Lead.updateById(
                     workingLead.id,
                     {
                         status: nextStatus,
                         attempt_counters: currentCounters,
                         last_contacted_at: new Date(),
-                        next_action: null,
-                        next_action_time: null,
+                        next_action: parkedAction,
+                        next_action_time: parkedAt,
                     },
                     orgId
                 );
@@ -500,8 +570,12 @@ class AseScheduler {
                         status: nextStatus,
                         attempt_counters: currentCounters,
                         last_contacted_at: new Date(),
-                        next_action: currentCounters.email >= 3 ? null : "EMAIL",
-                        next_action_time: currentCounters.email >= 3 ? null : firstFollowUpAt,
+                        next_action: currentCounters.email >= 3
+                            ? (Number(currentCounters.voice || 0) < 2 && workingLead.phone ? "CALL" : "WAIT")
+                            : "EMAIL",
+                        next_action_time: currentCounters.email >= 3
+                            ? new Date(Date.now() + 15 * 60 * 1000)
+                            : firstFollowUpAt,
                     },
                     orgId
                 );
