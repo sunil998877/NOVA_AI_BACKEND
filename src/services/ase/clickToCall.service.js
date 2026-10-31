@@ -15,6 +15,7 @@ import {
     CLICK_TO_CALL_REUSE_WINDOW_MS,
     CLICK_TO_CALL_SOURCE,
     CLICK_TO_CALL_STATES,
+    CLICK_TO_CALL_STALE_GRACE_SEC,
     CLICK_TO_CALL_TERMINAL,
 } from "./clickToCall.constants.js";
 
@@ -87,6 +88,26 @@ export function emptyClickToCallSession(overrides = {}) {
     };
 }
 
+function terminalStateFromCall(call, session) {
+    const provider = String(call?.provider_status || parseCallMeta(call?.raw_metadata).lastProviderStatus || "").toLowerCase();
+    const outcome = String(call?.normalized_outcome || "").toLowerCase();
+    if (session.state === CLICK_TO_CALL_STATES.CONNECTED || session.connectedAt || Number(session.connectedDurationSec) > 0) {
+        return CLICK_TO_CALL_STATES.COMPLETED;
+    }
+    if (provider === "busy" || outcome === "busy") return CLICK_TO_CALL_STATES.BUSY;
+    if (provider === "failed" || provider === "rejected" || outcome === "failed") return CLICK_TO_CALL_STATES.FAILED;
+    if (provider === "no-answer" || provider === "timeout" || outcome === "no_answer") return CLICK_TO_CALL_STATES.NO_ANSWER;
+    return CLICK_TO_CALL_STATES.NO_ANSWER;
+}
+
+function callLooksFinished(call) {
+    if (call?.completed_at) return true;
+    const provider = String(call?.provider_status || "").toLowerCase();
+    const lastStatus = String(parseCallMeta(call?.raw_metadata).lastProviderStatus || "").toLowerCase();
+    const finished = new Set(["completed", "busy", "no-answer", "failed", "canceled", "cancelled", "timeout", "rejected"]);
+    return finished.has(provider) || finished.has(lastStatus);
+}
+
 export function sessionFromCall(call) {
     if (!call) return emptyClickToCallSession();
     const meta = parseCallMeta(call.raw_metadata);
@@ -108,8 +129,41 @@ export function sessionFromCall(call) {
         failureReason: call.failure_reason || meta.failureReason || null,
         label: CLICK_TO_CALL_LABELS[meta.sessionState] || CLICK_TO_CALL_LABELS.initiating,
     });
-    session.label = CLICK_TO_CALL_LABELS[session.state] || session.state;
+    if (!CLICK_TO_CALL_TERMINAL.has(session.state) && callLooksFinished(call)) {
+        session.state = terminalStateFromCall(call, session);
+        session.endedAt = session.endedAt || call.completed_at || new Date().toISOString();
+    }
+    session.label = CLICK_TO_CALL_LABELS[session.state] || "Call";
     return session;
+}
+
+export function expireStaleClickToCallSession(session, now = Date.now()) {
+    const next = { ...emptyClickToCallSession(), ...session };
+    if (!next.state || next.state === CLICK_TO_CALL_STATES.IDLE || CLICK_TO_CALL_TERMINAL.has(next.state)) {
+        next.label = CLICK_TO_CALL_LABELS[next.state] || "Call";
+        return next;
+    }
+    if (next.state === CLICK_TO_CALL_STATES.CONNECTED) {
+        next.label = CLICK_TO_CALL_LABELS[next.state];
+        return next;
+    }
+    const started = Date.parse(next.initiatedAt || 0);
+    const age = Number.isFinite(started) && started > 0 ? now - started : Number.POSITIVE_INFINITY;
+    const staleAfterMs = (ringTimeoutSec() + CLICK_TO_CALL_STALE_GRACE_SEC) * 1000;
+    const leadStaleAfterMs = staleAfterMs * 2;
+    const tooOld =
+        next.state === CLICK_TO_CALL_STATES.CALLING_LEAD || next.state === CLICK_TO_CALL_STATES.YOU_ANSWERED
+            ? age > leadStaleAfterMs
+            : age > staleAfterMs;
+    if (!tooOld) {
+        next.label = CLICK_TO_CALL_LABELS[next.state] || next.state;
+        return next;
+    }
+    next.state = CLICK_TO_CALL_STATES.NO_ANSWER;
+    next.endedAt = next.endedAt || new Date(now).toISOString();
+    next.failureReason = next.failureReason || "stale_session";
+    next.label = CLICK_TO_CALL_LABELS[next.state] || "Call";
+    return next;
 }
 
 export function reduceClickToCallEvent(session, event = {}) {
@@ -631,13 +685,25 @@ export async function startClickToCall(orgId, leadId, user = {}, deps = {}) {
 export async function getClickToCallSession(orgId, callId) {
     const call = await Call.findById(orgId, callId);
     if (!call) throw httpError("Call record not found", 404);
-    return { call, session: sessionFromCall(call) };
+    const current = sessionFromCall(call);
+    const session = expireStaleClickToCallSession(current);
+    if (session.state !== current.state) {
+        const saved = await saveSession(orgId, call, session, { lastEvent: "stale_timeout" }).catch(() => call);
+        return { call: saved || call, session };
+    }
+    return { call, session };
 }
 
 export async function getLatestClickToCallForLead(orgId, leadId) {
     const call = await Call.findLatestByLead(orgId, leadId, { source: CLICK_TO_CALL_SOURCE });
     if (!call) return { call: null, session: emptyClickToCallSession({ leadId: Number(leadId) }) };
-    return { call, session: sessionFromCall(call) };
+    const current = sessionFromCall(call);
+    const session = expireStaleClickToCallSession(current);
+    if (session.state !== current.state) {
+        const saved = await saveSession(orgId, call, session, { lastEvent: "stale_timeout" }).catch(() => call);
+        return { call: saved || call, session };
+    }
+    return { call, session };
 }
 
 function waitMs(ms) {

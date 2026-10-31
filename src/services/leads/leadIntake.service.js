@@ -6,8 +6,16 @@ import { enqueueLeadCompanyResearch } from "./companyResearchQueue.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { query } from "../../config/db.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
-import { consentFromIntake, isConsentGranted } from "../ase/consent.service.js";
+import { applyImplicitChannelConsent, consentFromIntake, isConsentGranted } from "../ase/consent.service.js";
 import { recordLeadConsentSnapshot } from "../ase/consentAudit.service.js";
+import {
+    PHONE_STATUSES,
+    assertPhoneOrEmpty,
+    isAcceptablePhone,
+    parsePhoneInput,
+    phoneFieldsFromParsed,
+    phoneLookupKeys,
+} from "./phoneNumber.service.js";
 
 export const LEAD_SOURCES = Object.freeze({
     API: "API",
@@ -16,7 +24,6 @@ export const LEAD_SOURCES = Object.freeze({
 });
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE_CLEAN_REGEX = /[^\d+]/g;
 export const MAX_BATCH = 5000;
 const CONSUMER_EMAIL_DOMAINS = new Set([
     "gmail.com",
@@ -81,7 +88,7 @@ const normalizeTags = (tags) => {
     return [...new Set(list.map((t) => String(t).trim()).filter(Boolean))].slice(0, 25);
 };
 
-export function normalizeLead(raw = {}) {
+export function normalizeLead(raw = {}, options = {}) {
     const email = clean(raw.email)?.toLowerCase();
     if (!email) throw new Error("Email is required");
     if (!EMAIL_REGEX.test(email)) throw new Error(`Invalid email: ${email}`);
@@ -90,20 +97,32 @@ export function normalizeLead(raw = {}) {
     const last = clean(raw.lastName || raw.last_name);
     const name = clean(raw.name || raw.fullName || raw.full_name) || [first, last].filter(Boolean).join(" ") || null;
 
-    let phone = clean(raw.phone || raw.mobile, 64);
-    if (phone) {
-        phone = phone.replace(PHONE_CLEAN_REGEX, "");
-        if (phone.replace(/\D/g, "").length < 7) {
-            const error = new Error(`Invalid phone: ${phone}`);
-            error.field = "phone";
-            throw error;
-        }
+    const phoneOptions = {
+        defaultCountry: raw.defaultCountry || options.defaultCountry,
+        explicitCountry: raw.phoneCountry || raw.explicitCountry || raw.country,
+        confirmConflict: raw.confirmConflict === true || options.confirmConflict === true,
+    };
+    const lenientPhone = options.phoneMode === "lenient" || String(raw.source || options.source || "").toUpperCase() === "CRM_HUBSPOT";
+    const parsedPhone = lenientPhone
+        ? parsePhoneInput(raw.phone || raw.mobile, phoneOptions)
+        : assertPhoneOrEmpty(raw.phone || raw.mobile, phoneOptions);
+    const phoneFields = phoneFieldsFromParsed(parsedPhone);
+    if (lenientPhone && parsedPhone.status !== PHONE_STATUSES.EMPTY && !isAcceptablePhone(parsedPhone)) {
+        phoneFields.phone = parsedPhone.e164 || clean(raw.phone || raw.mobile, 64);
+        phoneFields.phone_original = parsedPhone.input || clean(raw.phone || raw.mobile, 64);
+        phoneFields.phone_validation = parsedPhone.status;
     }
 
     const priority = Number(raw.priority) || 50;
-    const source = raw.source || "INGESTION";
-    const emailConsent = consentRecord(raw.emailConsent || raw.email_consent, raw.consentEmail, source);
-    const voiceConsent = consentRecord(raw.voiceConsent || raw.voice_consent, raw.consentVoice, source);
+    const source = raw.source || options.source || "INGESTION";
+    const emailConsent = applyImplicitChannelConsent(
+        consentRecord(raw.emailConsent || raw.email_consent, raw.consentEmail, source),
+        { hasChannel: Boolean(email), source, flag: raw.consentEmail }
+    );
+    const voiceConsent = applyImplicitChannelConsent(
+        consentRecord(raw.voiceConsent || raw.voice_consent, raw.consentVoice, source),
+        { hasChannel: Boolean(phoneFields.phone), source, flag: raw.consentVoice }
+    );
 
     const whatsappConsent = raw.whatsappConsent || raw.whatsapp_consent || {
         status: "UNKNOWN",
@@ -117,7 +136,12 @@ export function normalizeLead(raw = {}) {
         firstName: first,
         lastName: last,
         company: clean(raw.company || raw.organization),
-        phone: phone || null,
+        phone: phoneFields.phone,
+        phone_e164: phoneFields.phone_e164,
+        phone_original: phoneFields.phone_original,
+        phone_country: phoneFields.phone_country,
+        phone_calling_code: phoneFields.phone_calling_code,
+        phone_validation: phoneFields.phone_validation,
         whatsapp_number: clean(raw.whatsappNumber || raw.whatsapp_number, 64),
         tags: normalizeTags(raw.tags),
         externalId: clean(raw.externalId || raw.external_id, 128),
@@ -142,12 +166,12 @@ export async function processLead(rawLead, options = {}) {
     } = options;
 
     if (!organizationId) throw new Error("organizationId is required to ingest a lead");
-    const data = normalizeLead(rawLead);
+    const data = normalizeLead(rawLead, options);
     const domain = data.email.split("@")[1];
     const companyDomain = domain && !CONSUMER_EMAIL_DOMAINS.has(domain) ? domain : null;
     const lockKeys = [
         `org:${organizationId}:email:${data.email}`,
-        data.phone ? `org:${organizationId}:phone:${data.phone}` : null,
+        data.phone ? `org:${organizationId}:phone:${data.phone_e164 || data.phone}` : null,
         matchDomain && companyDomain ? `org:${organizationId}:domain:${companyDomain}` : null,
     ];
     return withLocks(lockKeys, () => ingestLockedLead(data, {
@@ -185,7 +209,7 @@ async function ingestLockedLead(data, {
     if (suppressedCache) {
         if (
             suppressedCache.emails.has(data.email) ||
-            (data.phone && suppressedCache.phones.has(data.phone)) ||
+            (data.phone && phoneLookupKeys(data.phone).some((key) => suppressedCache.phones.has(key) || suppressedCache.phones.has(data.phone))) ||
             (domain && suppressedCache.domains.has(domain))
         ) {
             isSuppressed = { reason: "Matched DNC list" };
@@ -205,7 +229,7 @@ async function ingestLockedLead(data, {
     if (!existing) {
         existing =
             (await Lead.findByEmail(organizationId, data.email)) ||
-            (data.phone ? await Lead.findByPhone(organizationId, data.phone) : null) ||
+            (data.phone ? await Lead.findByPhone(organizationId, data.phone_e164 || data.phone) : null) ||
             (data.externalId ? await Lead.findByExternalId(organizationId, source, data.externalId) : null);
 
         if (!existing && matchDomain && domain) {
@@ -236,6 +260,11 @@ async function ingestLockedLead(data, {
                 last_name: data.lastName ?? existing.last_name,
                 company: data.company ?? existing.company,
                 phone: data.phone ?? existing.phone,
+                phone_e164: data.phone_e164 ?? existing.phone_e164,
+                phone_original: data.phone_original ?? existing.phone_original,
+                phone_country: data.phone_country ?? existing.phone_country,
+                phone_calling_code: data.phone_calling_code ?? existing.phone_calling_code,
+                phone_validation: data.phone_validation ?? existing.phone_validation,
                 whatsapp_number: data.whatsapp_number ?? existing.whatsapp_number,
                 tags: mergedTags,
                 external_id: data.externalId ?? existing.external_id,
@@ -285,7 +314,7 @@ async function ingestLockedLead(data, {
         if (!isDuplicateKey(error)) throw error;
         const raced =
             (await Lead.findByEmail(organizationId, data.email)) ||
-            (data.phone ? await Lead.findByPhone(organizationId, data.phone) : null);
+            (data.phone ? await Lead.findByPhone(organizationId, data.phone_e164 || data.phone) : null);
         if (!raced) throw error;
         if (!updateExisting) {
             return { status: "skipped", reason: "duplicate", lead: raced };
@@ -298,6 +327,11 @@ async function ingestLockedLead(data, {
                 last_name: data.lastName ?? raced.last_name,
                 company: data.company ?? raced.company,
                 phone: data.phone ?? raced.phone,
+                phone_e164: data.phone_e164 ?? raced.phone_e164,
+                phone_original: data.phone_original ?? raced.phone_original,
+                phone_country: data.phone_country ?? raced.phone_country,
+                phone_calling_code: data.phone_calling_code ?? raced.phone_calling_code,
+                phone_validation: data.phone_validation ?? raced.phone_validation,
                 tags: [...new Set([...(raced.tags || []), ...data.tags])],
                 metadata: { ...(raced.metadata || {}), ...data.metadata },
             },
@@ -424,7 +458,13 @@ export async function processBatch(rawLeads, options = {}) {
                 summary.failed += 1;
                 summary.rejected += 1;
                 if (summary.errors.length < 100) {
-                    summary.errors.push({ row: i + 1, email: row?.email ?? null, error: error.message });
+                    summary.errors.push({
+                        row: i + 1,
+                        email: row?.email ?? null,
+                        error: error.message,
+                        field: error.field || null,
+                        code: error.code || null,
+                    });
                 }
             }
             if (onProgress && (i + 1) % 25 === 0) {

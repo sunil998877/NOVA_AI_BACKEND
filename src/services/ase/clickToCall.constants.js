@@ -29,16 +29,17 @@ export const CLICK_TO_CALL_OPEN_STATUSES = new Set([
 ]);
 
 export const CLICK_TO_CALL_REUSE_WINDOW_MS = 2 * 60 * 1000;
+export const CLICK_TO_CALL_STALE_GRACE_SEC = 15;
 
 export const CLICK_TO_CALL_LABELS = Object.freeze({
     idle: "Call",
-    initiating: "Initiating",
-    calling_you: "Calling you",
-    you_answered: "You answered",
+    initiating: "Calling...",
+    calling_you: "Calling...",
+    you_answered: "Connecting...",
     calling_lead: "Calling lead",
     connected: "Connected",
-    completed: "Completed",
-    busy: "Busy",
-    no_answer: "No answer",
-    failed: "Failed",
+    completed: "Call",
+    busy: "Call",
+    no_answer: "Call",
+    failed: "Call",
 });

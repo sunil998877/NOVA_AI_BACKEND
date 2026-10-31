@@ -12,6 +12,7 @@ import { canAutoDispatch } from "../ase/operatingMode.service.js";
 import { enqueuePendingApproval } from "../ase/approvalQueue.service.js";
 import { isConsentGranted } from "../ase/consent.service.js";
 import { enqueueFollowUpTaskJob } from "../queue/enqueue.js";
+import { withCycleLock } from "../queue/cache.service.js";
 
 class FollowUpSchedulerService {
     constructor() {
@@ -48,7 +49,7 @@ class FollowUpSchedulerService {
         if (!this.isRunning || this.isProcessing) return;
         this.isProcessing = true;
         try {
-            await this.processDueTasks();
+            await withCycleLock("followup-scheduler-cycle", 2 * 60 * 1000, () => this.processDueTasks());
         } catch (error) {
             console.error("[FollowUp Scheduler] Error during cycle:", error.message);
         } finally {
@@ -221,7 +222,7 @@ class FollowUpSchedulerService {
                     headers["References"] = task.in_reply_to;
                 }
 
-                const idempotencyKey = `followup_${enrollment.id}_step_${task.step_number}_${Date.now()}`;
+                const idempotencyKey = `followup_${enrollment.id}_step_${task.step_number}_task_${task.id}_try_${Number(task.retry_count || 0)}`;
                 const deliveryResult = await unifiedDeliveryService.deliverSingle({
                     orgId,
                     to: lead.email,

@@ -49,6 +49,8 @@ def teacher_action(raw):
         return 2
     if email_ok < 0.5 and voice_ok < 0.5:
         return 2
+    if voice_ok >= 0.5 and voice_att == 0 and email_att == 0:
+        return 1
     if clicks >= 1 and voice_ok >= 0.5 and voice_att < 2 and hours >= 12:
         return 1
     if high_intent >= 0.5 and voice_ok >= 0.5 and voice_att < 2 and email_att >= 1 and hours >= 20:
@@ -158,11 +160,30 @@ def load_labeled_rows():
 def build_dataset(samples=4800, seed=42):
     labeled = load_labeled_rows()
     if labeled:
-        features = np.vstack([scale_row(raw) for raw, _, _, _ in labeled])
-        actions = np.array([action for _, action, _, _ in labeled], dtype=np.int64)
-        delays = np.array([delay for _, _, delay, _ in labeled], dtype=np.float32)
-        conversions = np.array([converted for _, _, _, converted in labeled], dtype=np.int64)
-        return features, actions, delays, conversions, "labeled_file"
+        features = [scale_row(raw) for raw, _, _, _ in labeled]
+        actions = [action for _, action, _, _ in labeled]
+        delays = [delay for _, _, delay, _ in labeled]
+        conversions = [converted for _, _, _, converted in labeled]
+        source = "labeled_file"
+        # Fewer than 800 real rows overfit; keep every live lead and fill with teacher examples.
+        if len(labeled) < 800:
+            rng = np.random.default_rng(seed)
+            extra = max(samples - len(labeled), 0)
+            for _ in range(extra):
+                raw = make_raw_row(rng)
+                action = teacher_action(raw)
+                features.append(scale_row(raw))
+                actions.append(action)
+                delays.append(delay_target(raw, action))
+                conversions.append(conversion_target(raw))
+            source = "real_leads_mixed"
+        return (
+            np.vstack(features),
+            np.array(actions, dtype=np.int64),
+            np.array(delays, dtype=np.float32),
+            np.array(conversions, dtype=np.int64),
+            source,
+        )
     rng = np.random.default_rng(seed)
     features = []
     actions = []
@@ -365,14 +386,15 @@ def train_and_save(samples=4800, seed=42):
         },
         "limitations": [
             "Holdout metrics only. Not live production performance.",
-            "Synthetic teacher labels are used unless ASE_ML_TRAINING_PATH is provided.",
+            "Synthetic teacher labels are used unless training_rows.jsonl or ASE_ML_TRAINING_PATH is provided.",
+            "If fewer than 800 real rows exist they are mixed with synthetic examples so the model does not overfit.",
             "Email opens are a weak label and are not used as the conversion target alone.",
         ],
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
     }
     metadata = {
         "model_name": "nova_brain_lead_next_action",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "framework": "onnx-neural-network",
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "normalization": "clip_divide_by_scale",

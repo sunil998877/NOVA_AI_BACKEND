@@ -476,6 +476,18 @@ export const followUpEngine = {
         const replyText = replyPayload.replyText || replyPayload.body || "";
         const messageId = replyPayload.messageId || null;
 
+        try {
+            const cadence = await import("../ase/cadence/cadence.service.js");
+            if (outcome === ASE_OUTCOMES.DNC) {
+                const { stopCadenceForLead } = await import("../ase/cadence/cadenceHalt.js");
+                await stopCadenceForLead(orgId, lead.id, "Prospect opted out via email reply", { actor: "prospect", flags: { optedOut: true } });
+            } else {
+                await cadence.onLeadReplied(orgId, lead.id, { messageId, intent: outcome });
+            }
+        } catch (err) {
+            console.warn("[FollowUp] Cadence reply hook failed:", err.message);
+        }
+
         if (!enrollment && (outcome === ASE_OUTCOMES.OOO || outcome === ASE_OUTCOMES.DNC || outcome === ASE_OUTCOMES.CALLBACK)) {
             return null;
         }

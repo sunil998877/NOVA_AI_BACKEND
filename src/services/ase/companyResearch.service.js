@@ -1,8 +1,8 @@
-import net from "node:net";
 import OpenAI from "openai";
 import { env } from "../../config/env.js";
 import { getOpenAiClient } from "../../controllers/OpenAI/client.js";
 import { getCachedResearch, setCachedResearch } from "../queue/cache.service.js";
+import { fetchCompanySite, isBlockedAddress } from "./companyWebsite.service.js";
 
 function getResearchOpenAiClient() {
     const apiKey = String(env.openaiApiKey || "").trim();
@@ -57,24 +57,6 @@ function cacheKey(domain, companyName) {
     return cleanDomain(domain) || `name:${String(companyName || "").trim().toLowerCase()}`;
 }
 
-function isBlockedAddress(address) {
-    const ip = String(address || "").replace(/^::ffff:/i, "");
-    if (net.isIP(ip) === 0) return true;
-    if (ip === "127.0.0.1" || ip === "::1" || ip === "0.0.0.0") return true;
-    if (ip.startsWith("169.254.") || ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
-    if (ip.startsWith("172.")) {
-        const second = Number(ip.split(".")[1]);
-        if (second >= 16 && second <= 31) return true;
-    }
-    if (ip.startsWith("100.")) {
-        const second = Number(ip.split(".")[1]);
-        if (second >= 64 && second <= 127) return true;
-    }
-    const lower = ip.toLowerCase();
-    if (lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80")) return true;
-    return false;
-}
-
 function scoreResearch({ domain, effectiveDomain, sitePages }) {
     const pages = sitePages || [];
     const resolvedDomain = domain || effectiveDomain;
@@ -103,7 +85,7 @@ function buildProfile(context, extras = {}) {
             url: page.url,
             title: page.title || "",
             retrievedAt: page.retrievedAt || new Date().toISOString(),
-            excerpt: (page.description || page.title || "").slice(0, 240),
+            excerpt: (page.description || page.excerpt || page.title || "").slice(0, 240),
         })),
     ];
     const facts = [];
@@ -116,13 +98,14 @@ function buildProfile(context, extras = {}) {
             evidenceExcerpt: primary.title,
         });
     }
-    if (primary.description) {
+    for (const page of pages) {
+        if (!page.description) continue;
         facts.push({
-            field: "overview",
-            value: primary.description,
-            sourceUrl: primary.url || null,
+            field: page === primary ? "overview" : "pageOverview",
+            value: page.description,
+            sourceUrl: page.url || null,
             verificationStatus: "verified",
-            evidenceExcerpt: primary.description.slice(0, 240),
+            evidenceExcerpt: page.description.slice(0, 240),
         });
     }
     const summary = extras.summary || primary.description || (primary.title
@@ -267,7 +250,60 @@ Return JSON:
     });
 }
 
+async function summarizeSiteWithOpenAi(context) {
+    const client = getResearchOpenAiClient();
+    if (!client) return null;
+    const corpus = context.sitePages.map((page) => [
+        `URL: ${page.url}`,
+        page.title && `Title: ${page.title}`,
+        page.description && `Description: ${page.description}`,
+        page.headings?.length && `Headings: ${page.headings.join(" | ")}`,
+        page.excerpt && `Text: ${page.excerpt}`,
+    ].filter(Boolean).join("\n")).join("\n\n").slice(0, 6000);
+    const response = await client.chat.completions.create({
+        model: process.env.ASE_RESEARCH_MODEL || "gpt-4o-mini",
+        messages: [
+            {
+                role: "system",
+                content: "Summarize a company strictly from the website text provided. Use only statements present in the text. If a field is not supported by the text, return an empty string for it. Never add customers, revenue, funding, locations, news, or claims that are not in the text. Output valid JSON.",
+            },
+            {
+                role: "user",
+                content: `Company: ${context.effectiveCompany}\n\nWebsite text:\n${corpus}\n\nReturn JSON: {"summary": "1-2 sentences on what the company does", "industry": "", "coreServices": "", "targetAudience": ""}`,
+            },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+    });
+    const parsed = JSON.parse(response.choices[0]?.message?.content || "{}");
+    const pick = (value) => String(value || "").trim().slice(0, 400);
+    return {
+        summary: pick(parsed.summary) || null,
+        industry: pick(parsed.industry),
+        coreServices: pick(parsed.coreServices),
+        targetAudience: pick(parsed.targetAudience),
+    };
+}
+
+async function researchFromWebsite(context) {
+    if (!context.effectiveDomain || process.env.ASE_RESEARCH_FETCH_SITE === "false") return null;
+    const sitePages = await fetchCompanySite(context.effectiveDomain).catch(() => []);
+    if (!sitePages.length) return null;
+    const siteContext = { ...context, sitePages };
+    const summarized = await summarizeSiteWithOpenAi(siteContext).catch((error) => {
+        console.warn("[CompanyResearch] Website summary failed:", error.message);
+        return null;
+    });
+    return buildProfile(siteContext, { ...(summarized || {}), source: "website_scrape" });
+}
+
 async function researchUncached(context) {
+    try {
+        const fromSite = await researchFromWebsite(context);
+        if (fromSite && fromSite.qualityStatus !== "INSUFFICIENT_EVIDENCE") return fromSite;
+    } catch (error) {
+        console.warn("[CompanyResearch] Website research failed:", error.message);
+    }
     try {
         const researched = await lookupCompanyWithOpenAi(context);
         if (researched) return researched;

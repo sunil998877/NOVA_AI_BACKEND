@@ -11,6 +11,7 @@ import {
     startClickToCall,
     toE164,
 } from "../../services/ase/clickToCall.service.js";
+import { CLICK_TO_CALL_LABELS } from "../../services/ase/clickToCall.constants.js";
 import { Call } from "../../models/call.model.js";
 import { TelephonyWebhookEvent } from "../../models/telephony-webhook-event.model.js";
 import { resolvePublicBaseUrl } from "../../utils/publicBaseUrl.js";
@@ -21,13 +22,15 @@ function httpError(err, res) {
 
 function publicSession(result) {
     const session = result.session || {};
+    const state = session.state || "idle";
     return {
         callId: result.call?.id || session.callId || null,
         leadId: result.call?.lead_id || session.leadId || null,
-        state: session.state || "initiating",
-        label: session.label || session.state || "Initiating",
+        state,
+        label: session.label || CLICK_TO_CALL_LABELS[state] || "Call",
         primaryPhone: session.primaryPhone || null,
         leadPhone: session.leadPhone || result.leadPhone || null,
+        initiatedAt: session.initiatedAt || null,
         reused: Boolean(result.reused),
         concurrent: Boolean(result.concurrent),
         connectedDurationSec: session.connectedDurationSec || 0,

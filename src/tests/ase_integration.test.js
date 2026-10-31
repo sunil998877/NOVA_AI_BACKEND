@@ -85,7 +85,7 @@ export async function runAseIntegrationTests() {
             do_not_contact: 0,
         };
         const freshDecision = await OrchestratorService.evaluateNextAction(freshLead);
-        assert("Orchestrator schedules EMAIL first for fresh lead", freshDecision.action === "EMAIL");
+        assert("Orchestrator schedules CALL first for a callable fresh lead", freshDecision.action === "CALL");
 
         const contactedLead = {
             id: 102,

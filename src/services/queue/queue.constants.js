@@ -4,6 +4,7 @@ export const QUEUE_NAMES = Object.freeze({
     EMAIL_PERSONALIZATION: "nova-email-personalization",
     FOLLOW_UP: "nova-follow-up",
     ASE_ACTIONS: "ase-actions",
+    ASE_CADENCE: "ase-cadence-steps",
 });
 
 export const JOB_NAMES = Object.freeze({
@@ -12,6 +13,7 @@ export const JOB_NAMES = Object.freeze({
     DRAFT_EMAIL: "draft_email",
     FOLLOW_UP_TASK: "follow_up_task",
     EXECUTE_ACTION: "execute_action",
+    EXECUTE_CADENCE_STEP: "execute_cadence_step",
 });
 
 export const CACHE_KEYS = Object.freeze({
@@ -22,7 +24,7 @@ export const CACHE_KEYS = Object.freeze({
     RATE: (name) => `rate:${name}`,
 });
 
-export const RESEARCH_CACHE_SCHEMA = 1;
+export const RESEARCH_CACHE_SCHEMA = 2;
 
 export const DEFAULT_JOB_OPTIONS = Object.freeze({
     attempts: 5,
@@ -37,4 +39,5 @@ export const QUEUE_CONCURRENCY = Object.freeze({
     [QUEUE_NAMES.EMAIL_PERSONALIZATION]: 2,
     [QUEUE_NAMES.FOLLOW_UP]: 2,
     [QUEUE_NAMES.ASE_ACTIONS]: 5,
+    [QUEUE_NAMES.ASE_CADENCE]: Number(process.env.ASE_CADENCE_CONCURRENCY || 10),
 });

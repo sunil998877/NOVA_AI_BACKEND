@@ -94,6 +94,17 @@ export async function releaseLock(name, token) {
     } catch (_) {}
 }
 
+// Fails open (runs) when Redis is unavailable; callers must still rely on atomic DB claims.
+export async function withCycleLock(name, ttlMs, fn) {
+    const token = await acquireLock(name, ttlMs);
+    if (!token) return { lockHeld: true };
+    try {
+        return await fn();
+    } finally {
+        await releaseLock(name, token);
+    }
+}
+
 export async function getCachedResearch(domain) {
     if (!domain) return null;
     const payload = await cacheGet(CACHE_KEYS.RESEARCH(domain));

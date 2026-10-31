@@ -13,9 +13,8 @@ import { validateDispatchEligibility } from "../../services/ase/complianceGate.s
 import { applyPlivoCallPayload } from "../../services/ase/voiceOutcomeApply.service.js";
 import { handleLiveVoiceInterest, isFinishedCallEvent } from "../../services/ase/warmTransfer.service.js";
 import { schedulePlivoCallSync } from "../../services/ase/plivoCallPoll.service.js";
-import { enqueuePendingApproval } from "../../services/ase/approvalQueue.service.js";
-import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
-import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
+import { startAutonomousCall } from "../../services/ase/autonomousCall.service.js";
+import { isClickToCallRecord } from "../../services/ase/clickToCall.service.js";
 
 const normalizePhone = (num) => {
     if (!num) return "";
@@ -45,6 +44,10 @@ export const handlePlivoAnswer = asyncHandler(async (req, res) => {
         });
 
         const existingCall = await Call.findByProviderUuid(orgId, callUuid);
+        if (existingCall && isClickToCallRecord(existingCall)) {
+            res.set("Content-Type", "application/xml");
+            return res.status(200).send(plivoVoiceAdapter.generateCallbackPromiseXml("Connecting you now."));
+        }
         if (existingCall) {
             await Call.updateById(orgId, existingCall.id, {
                 is_answered: 1,
@@ -515,70 +518,16 @@ export const makeDirectCall = asyncHandler(async (req, res) => {
 
 export const triggerAutonomousCall = asyncHandler(async (req, res) => {
     const orgId = Number(req.user?.organization_id || 1);
-    const { leadId } = req.body || {};
-
-    if (!leadId) {
-        return res.status(400).json({ error: "leadId is required" });
-    }
-
-    let lead = await Lead.findById(leadId, orgId);
-    if (!lead) {
-        return res.status(404).json({ error: "Lead not found" });
-    }
-    if (lead.do_not_contact) {
-        return res.status(400).json({ error: "Lead is suppressed (DNC)" });
-    }
-    if (!lead.phone) {
-        return res.status(400).json({ error: "Lead has no phone number" });
-    }
-    const trigDigits = String(lead.phone || "").replace(/[^\d]/g, "");
-    if (trigDigits.length < 10 || trigDigits.length > 15) {
-        return res.status(400).json({ error: "Lead phone number is unverified or invalid" });
-    }
-
-    lead = await Lead.updateById(
-        lead.id,
-        {
-            next_action: "CALL",
-            next_action_time: new Date(),
-            status: "DISPATCH_CALL",
-        },
-        orgId
-    );
-
-    const mode = await getOperatingMode(orgId);
-    if (mode === OPERATING_MODES.AI_RECOMMENDED) {
-        const queued = await enqueuePendingApproval({
-            organizationId: orgId,
-            leadId: lead.id,
-            action: "CALL",
-            payload: { source: "autonomous_call_ui" },
+    const leadId = Number(req.body?.leadId || req.params.leadId || req.params.id);
+    try {
+        const result = await startAutonomousCall(orgId, leadId);
+        return res.status(result.executed || result.queued ? 200 : 400).json({
+            data: result,
+            error: result.executed || result.queued ? undefined : (result.reason || "Call did not execute"),
         });
-        return res.status(200).json({
-            data: {
-                lead,
-                executed: false,
-                queued: true,
-                approvalId: queued.approval?.id || null,
-                action: "CALL",
-                operatingMode: mode,
-            },
-        });
+    } catch (err) {
+        return res.status(err.status || 500).json({ error: err.message });
     }
-
-    const flags = executionFlagsForMode(mode, { humanInitiated: true });
-    const result = await aseScheduler.processLeadAction(lead, flags);
-    const updated = await Lead.findById(lead.id, orgId);
-
-    return res.status(result?.executed ? 200 : 400).json({
-        data: {
-            lead: updated,
-            executed: Boolean(result?.executed),
-            action: "CALL",
-            reason: result?.reason || null,
-        },
-        error: result?.executed ? undefined : (result?.reason || "Call did not execute"),
-    });
 });
 
 export const queueAutonomousCall = asyncHandler(async (req, res) => {

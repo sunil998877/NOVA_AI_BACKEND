@@ -99,6 +99,25 @@ test("NOVA Brain: Suppressed, closed, or terminal leads are blocked", async () =
     assert.equal(decision.reasonCode, "SUPPRESSION_LIST_MATCH");
 });
 
+test("NOVA Brain: First touch on a callable lead is CALL, not EMAIL", () => {
+    modelRegistry.setMode("ACTIVE");
+    const decision = nextBestActionService.determineNextBestAction({
+        eligibility: { candidateActions: ["EMAIL", "CALL"], cooldownRequired: false },
+        features: {
+            emailAttempts: 0,
+            voiceAttempts: 0,
+            linkClicks: 0,
+            hoursSinceLastTouch: 999,
+            voiceConsentAllowed: true,
+            emailConsentAllowed: true,
+        },
+        priority: { tier: "P3_NORMAL", score: 50 },
+        prediction: { available: true, action: "EMAIL", delay_hours: 0, confidence: 0.9, reason_code: "ML_MODEL_DECISION" },
+    });
+    assert.equal(decision.recommendedAction, "CALL");
+    assert.equal(decision.reasonCode, "CALL_FIRST_CADENCE");
+});
+
 test("NOVA Brain: Timing head uses ML delay_hours for calls", () => {
     const features = leadFeatureService.extractFeatures({
         id: 201,
@@ -139,6 +158,25 @@ test("NOVA Brain: Follow-up cadence blocks extra emails but still allows a call"
     assert.equal(eligibility.candidateActions.includes("EMAIL"), false);
     assert.equal(eligibility.candidateActions.includes("CALL"), true);
     FollowUpEnrollment.findActiveByLeadId = async () => null;
+});
+
+test("NOVA Brain: Model WAIT does not skip the first post-email call", () => {
+    modelRegistry.setMode("ACTIVE");
+    const decision = nextBestActionService.determineNextBestAction({
+        eligibility: { candidateActions: ["EMAIL", "CALL"], cooldownRequired: false },
+        features: {
+            emailAttempts: 1,
+            voiceAttempts: 0,
+            linkClicks: 0,
+            hoursSinceLastTouch: 3,
+            voiceConsentAllowed: true,
+            emailConsentAllowed: true,
+        },
+        priority: { tier: "P3_NORMAL", score: 50 },
+        prediction: { available: true, action: "WAIT", delay_hours: 4, confidence: 0.8, reason_code: "ML_MODEL_DECISION" },
+    });
+    assert.equal(decision.recommendedAction, "CALL");
+    assert.equal(decision.reasonCode, "POST_EMAIL_FIRST_CALL");
 });
 
 test("NOVA Brain: Call right after the first email waits at least 15 minutes", () => {

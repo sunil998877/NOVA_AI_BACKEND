@@ -21,6 +21,8 @@ import { recordConsentEvent } from "../../services/ase/consentAudit.service.js";
 import { isTerminalStatus, sanitizeNextAction, sanitizeStatus } from "../../services/ase/lifecycle.service.js";
 import { buildNbaCard } from "../../services/ase/nbaCard.service.js";
 import { loggedDecisionFromTimeline } from "../../services/ase/nbaPresent.service.js";
+import { assertPhoneOrEmpty, phoneFieldsFromParsed } from "../../services/leads/phoneNumber.service.js";
+import { CadenceEnrollment, CadenceStep } from "../../models/ase-cadence.model.js";
 
 const TERMINAL_STATES = new Set(["CLOSED_WON", "CLOSED_LOST", "CLOSED_UNQUALIFIED", "SUPPRESSED_DNC"]);
 
@@ -43,8 +45,29 @@ export const listLeads = asyncHandler(async (req, res) => {
         limit,
     });
 
-    return res.status(200).json({ data: items, pagination: { page, limit, total } });
+    return res.status(200).json({ data: await attachCadenceSummary(orgId, items), pagination: { page, limit, total } });
 });
+
+async function attachCadenceSummary(orgId, items) {
+    if (!items?.length) return items;
+    try {
+        const enrollments = await CadenceEnrollment.findOpenByLeads(orgId, items.map((lead) => lead.id));
+        if (!enrollments.length) return items;
+        const nextDue = await CadenceStep.nextDueByEnrollments(orgId, enrollments.map((e) => e.id));
+        const byLead = new Map(enrollments.map((e) => [Number(e.lead_id), {
+            status: e.status,
+            stage: e.stage,
+            latestOutcome: e.latest_outcome,
+            callAttempts: e.call_attempts,
+            emailAttempts: e.email_attempts,
+            nextDueAt: nextDue.get(Number(e.id)) || null,
+        }]));
+        return items.map((lead) => (byLead.has(Number(lead.id)) ? { ...lead, cadence: byLead.get(Number(lead.id)) } : lead));
+    } catch (error) {
+        console.warn("[Leads] cadence summary unavailable:", error.message);
+        return items;
+    }
+}
 
 export const getLead = asyncHandler(async (req, res) => {
     const orgId = Number(req.user.organization_id || 1);
@@ -87,6 +110,29 @@ export const updateLead = asyncHandler(async (req, res) => {
     const updates = { ...req.body };
     const actorUserId = req.user.id;
     const consentChanges = [];
+
+    if (Object.prototype.hasOwnProperty.call(updates, "phone") || updates.phoneCountry || updates.explicitCountry) {
+        try {
+            const parsed = assertPhoneOrEmpty(updates.phone ?? lead.phone, {
+                defaultCountry: updates.defaultCountry,
+                explicitCountry: updates.phoneCountry || updates.explicitCountry || updates.country,
+                confirmConflict: updates.confirmConflict === true,
+            });
+            Object.assign(updates, phoneFieldsFromParsed(parsed));
+        } catch (error) {
+            return res.status(error.statusCode || 400).json({
+                error: error.message,
+                field: error.field || "phone",
+                code: error.code || null,
+                details: error.details || null,
+            });
+        }
+        delete updates.phoneCountry;
+        delete updates.explicitCountry;
+        delete updates.defaultCountry;
+        delete updates.confirmConflict;
+        delete updates.country;
+    }
 
     if (updates.consentEmail !== undefined || updates.email_consent !== undefined) {
         const next = updates.email_consent && typeof updates.email_consent === "object"

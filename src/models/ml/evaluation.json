@@ -1,5 +1,5 @@
 {
-  "data_source": "synthetic_teacher",
+  "data_source": "real_leads_mixed",
   "label_definition": {
     "action": "teacher_policy_or_labeled_action",
     "conversion": "qualified_engagement_clicks_or_repeat_opens",
@@ -12,43 +12,44 @@
     "split": "hours_since_last_touch_desc"
   },
   "action_model": {
-    "accuracy": 0.7312,
-    "macro_f1": 0.7253,
-    "weighted_f1": 0.7316,
+    "accuracy": 0.7198,
+    "macro_f1": 0.7163,
+    "weighted_f1": 0.7193,
     "per_class": {
       "email": {
-        "precision": 0.7919,
-        "recall": 0.7165,
-        "f1": 0.7523,
-        "support": 462
+        "precision": 0.813,
+        "recall": 0.6576,
+        "f1": 0.7271,
+        "support": 476
       },
       "call": {
-        "precision": 0.6382,
-        "recall": 0.8314,
-        "f1": 0.7221,
-        "support": 261
+        "precision": 0.5975,
+        "recall": 0.9183,
+        "f1": 0.7239,
+        "support": 257
       },
       "wait": {
-        "precision": 0.7624,
-        "recall": 0.6498,
-        "f1": 0.7016,
-        "support": 237
+        "precision": 0.7889,
+        "recall": 0.6256,
+        "f1": 0.6978,
+        "support": 227
       }
     }
   },
   "delay_model": {
-    "mae_hours": 2.68
+    "mae_hours": 5.404
   },
   "conversion_model": {
-    "accuracy": 0.9583,
-    "brier": 0.0208,
-    "log_loss": 0.0649,
-    "positive_rate": 0.9219
+    "accuracy": 0.9604,
+    "brier": 0.02,
+    "log_loss": 0.0635,
+    "positive_rate": 0.8604
   },
   "limitations": [
     "Holdout metrics only. Not live production performance.",
-    "Synthetic teacher labels are used unless ASE_ML_TRAINING_PATH is provided.",
+    "Synthetic teacher labels are used unless training_rows.jsonl or ASE_ML_TRAINING_PATH is provided.",
+    "If fewer than 800 real rows exist they are mixed with synthetic examples so the model does not overfit.",
     "Email opens are a weak label and are not used as the conversion target alone."
   ],
-  "evaluated_at": "2026-10-26T07:44:28.746086+00:00"
+  "evaluated_at": "2026-10-31T03:53:34.111887+00:00"
 }

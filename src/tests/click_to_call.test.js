@@ -5,6 +5,7 @@ import {
     classifyDialStatus,
     classifyPrimaryHangup,
     clickToCallAnswerXml,
+    expireStaleClickToCallSession,
     reduceClickToCallEvent,
     resetClickToCallLocks,
     sessionFromCall,
@@ -242,4 +243,42 @@ test("12. autonomous AI answer XML stays Speak-only and is not used by click-to-
         raw_metadata: { mode: "click_to_call", sessionState: "calling_you", primaryPhone: "+917352575923" },
     });
     assert.equal(stored.state, "calling_you");
+});
+
+test("14. a completed Plivo poll does not keep the button on Calling you", () => {
+    const stored = sessionFromCall({
+        id: 57,
+        lead_id: 218,
+        completed_at: "2026-10-29T10:31:20.000Z",
+        provider_status: "ringing",
+        initiation_source: CLICK_TO_CALL_SOURCE,
+        raw_metadata: {
+            mode: "click_to_call",
+            sessionState: "calling_you",
+            initiatedAt: "2026-10-29T10:31:07.639Z",
+            lastProviderStatus: "completed",
+        },
+    });
+    assert.equal(stored.state, CLICK_TO_CALL_STATES.NO_ANSWER);
+    assert.equal(stored.label, "Call");
+});
+
+test("13. a stale Calling you session expires back to Call", () => {
+    const fresh = expireStaleClickToCallSession({
+        state: CLICK_TO_CALL_STATES.CALLING_YOU,
+        initiatedAt: new Date().toISOString(),
+    });
+    assert.equal(fresh.state, CLICK_TO_CALL_STATES.CALLING_YOU);
+
+    const stale = expireStaleClickToCallSession({
+        state: CLICK_TO_CALL_STATES.CALLING_YOU,
+        initiatedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    });
+    assert.equal(stale.state, CLICK_TO_CALL_STATES.NO_ANSWER);
+    assert.equal(stale.label, "Call");
+
+    const missingTime = expireStaleClickToCallSession({
+        state: CLICK_TO_CALL_STATES.CALLING_YOU,
+    });
+    assert.equal(missingTime.state, CLICK_TO_CALL_STATES.NO_ANSWER);
 });

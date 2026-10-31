@@ -44,15 +44,24 @@ export const getPool = () => {
     return pool;
 };
 
-export const query = async (sql, params = []) => {
-    const [rows] = await getPool().execute(sql, params);
-    return rows;
-};
+const TRANSIENT_CONNECTION_ERRORS = new Set(["ECONNRESET", "PROTOCOL_CONNECTION_LOST", "EPIPE", "ETIMEDOUT"]);
+const isReadOnly = (sql) => /^\s*(SELECT|SHOW|DESCRIBE|EXPLAIN)\b/i.test(sql);
 
-export const execute = async (sql, params = []) => {
-    const [result] = await getPool().execute(sql, params);
-    return result;
-};
+// Writes are never retried: a reset after the server applied the statement would duplicate it.
+async function runStatement(sql, params) {
+    try {
+        const [result] = await getPool().execute(sql, params);
+        return result;
+    } catch (error) {
+        if (!TRANSIENT_CONNECTION_ERRORS.has(error.code) || !isReadOnly(sql)) throw error;
+        const [result] = await getPool().execute(sql, params);
+        return result;
+    }
+}
+
+export const query = (sql, params = []) => runStatement(sql, params);
+
+export const execute = (sql, params = []) => runStatement(sql, params);
 
 export const closeDb = async () => {
     if (!pool) return;
@@ -92,6 +101,8 @@ export const connectDb = async () => {
             queueLimit: 0,
             idleTimeout: 60000,
             connectTimeout: 20000,
+            enableKeepAlive: true,
+            keepAliveInitialDelay: 10000,
         };
 
         if (shouldUseSsl(host)) {

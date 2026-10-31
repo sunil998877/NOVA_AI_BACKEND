@@ -1,0 +1,91 @@
+export const aseCadencePolicySchema = {
+    table: "ase_cadence_policies",
+    columns:
+        "id, organization_id, name, is_default, is_active, settings, version, created_by, created_at, updated_at",
+    createTable: `CREATE TABLE IF NOT EXISTS ase_cadence_policies (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        organization_id INT NOT NULL,
+        name VARCHAR(160) NOT NULL,
+        is_default TINYINT(1) NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        settings JSON NOT NULL,
+        version INT NOT NULL DEFAULT 1,
+        created_by INT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        default_slot TINYINT GENERATED ALWAYS AS (CASE WHEN is_default = 1 THEN 1 ELSE NULL END) STORED,
+        UNIQUE KEY uq_cadence_policy_default (organization_id, default_slot),
+        INDEX idx_cadence_policy_org (organization_id, is_active)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+};
+
+export const aseCadenceEnrollmentSchema = {
+    table: "ase_cadence_enrollments",
+    columns:
+        "id, organization_id, lead_id, policy_id, policy_snapshot, status, stage, call_attempts, email_attempts, latest_outcome, status_reason, flags, enrolled_by, started_at, paused_at, completed_at, last_event_at, version, created_at, updated_at",
+    createTable: `CREATE TABLE IF NOT EXISTS ase_cadence_enrollments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        organization_id INT NOT NULL,
+        lead_id INT NOT NULL,
+        policy_id INT NOT NULL,
+        policy_snapshot JSON NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'ACTIVE',
+        stage VARCHAR(48) NOT NULL DEFAULT 'FIRST_CALL',
+        call_attempts INT NOT NULL DEFAULT 0,
+        email_attempts INT NOT NULL DEFAULT 0,
+        latest_outcome VARCHAR(48) NULL,
+        status_reason VARCHAR(255) NULL,
+        flags JSON NULL,
+        enrolled_by INT NULL,
+        started_at DATETIME NOT NULL,
+        paused_at DATETIME NULL,
+        completed_at DATETIME NULL,
+        last_event_at DATETIME NULL,
+        version INT NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        open_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status IN ('ACTIVE', 'PAUSED', 'NEEDS_REVIEW', 'HANDOFF', 'CALLBACK', 'REPLIED') THEN 1 ELSE NULL END) STORED,
+        UNIQUE KEY uq_cadence_open_lead (organization_id, lead_id, open_slot),
+        INDEX idx_cadence_enr_status (organization_id, status, updated_at),
+        INDEX idx_cadence_enr_lead (organization_id, lead_id, created_at),
+        INDEX idx_cadence_enr_sweep (status, last_event_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+};
+
+export const aseCadenceStepSchema = {
+    table: "ase_cadence_steps",
+    columns:
+        "id, organization_id, enrollment_id, lead_id, step_key, action, purpose, status, channel_state, due_at, decided_by, decision_reason, model_recommendation, call_id, provider_ref, draft, result, attempts, approved_by, approved_at, locked_at, executed_at, completed_at, created_at, updated_at",
+    createTable: `CREATE TABLE IF NOT EXISTS ase_cadence_steps (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        organization_id INT NOT NULL,
+        enrollment_id INT NOT NULL,
+        lead_id INT NOT NULL,
+        step_key VARCHAR(64) NOT NULL,
+        action VARCHAR(24) NOT NULL,
+        purpose VARCHAR(48) NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'SCHEDULED',
+        channel_state VARCHAR(32) NULL,
+        due_at DATETIME NOT NULL,
+        decided_by VARCHAR(16) NOT NULL DEFAULT 'POLICY',
+        decision_reason VARCHAR(255) NULL,
+        model_recommendation JSON NULL,
+        call_id INT NULL,
+        provider_ref VARCHAR(191) NULL,
+        draft JSON NULL,
+        result JSON NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        approved_by INT NULL,
+        approved_at DATETIME NULL,
+        locked_at DATETIME NULL,
+        executed_at DATETIME NULL,
+        completed_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_cadence_step (enrollment_id, step_key),
+        INDEX idx_cadence_step_due (status, due_at),
+        INDEX idx_cadence_step_lead (organization_id, lead_id, created_at),
+        INDEX idx_cadence_step_queue (organization_id, status, action, due_at),
+        INDEX idx_cadence_step_call (call_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+};

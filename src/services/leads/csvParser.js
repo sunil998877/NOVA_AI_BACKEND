@@ -66,6 +66,7 @@ const HEADER_ALIASES = {
     lastName: ["last name", "lastname", "last_name", "surname", "family name"],
     company: ["company", "company name", "organization", "organisation", "account"],
     phone: ["phone", "phone number", "mobile", "telephone", "contact number"],
+    country: ["country", "phone country", "country code", "nation", "region"],
     tags: ["tags", "tag", "labels", "segment"],
     priority: ["priority", "score", "lead priority", "rating"],
     whatsapp_number: ["whatsapp", "whatsapp number", "wa", "whatsapp_number"],

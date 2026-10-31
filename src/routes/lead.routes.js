@@ -8,6 +8,7 @@ import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureCon
 import { exportAseReportsCsv, getAseReports, getComplianceLog, listSegments } from "../controllers/Lead/reports.controller.js";
 import { getLeadDecision, getLeadConversionPrediction, getBrainStatus, updateBrainMode, getBrainEvaluation, getOperatingModeStatus, updateOperatingMode } from "../controllers/Lead/brain.controller.js";
 import { getLeadClickToCall, startLeadClickToCall } from "../controllers/Ase/clickToCall.controller.js";
+import { listPhoneCountries, parseLeadPhone } from "../controllers/Lead/phone.controller.js";
 const router = Router();
 
 const leadIngestLimiter = rateLimit({
@@ -29,6 +30,8 @@ const clickToCallLimiter = rateLimit({
 router.post("/", leadIngestLimiter, authenticateLeadApi, ingestLeadsFromApi);
 router.post("/webhook", leadIngestLimiter, authenticateLeadApi, ingestLeadsFromApi);
 
+router.get("/phone/countries", authenticate, requireAseRole, listPhoneCountries);
+router.post("/phone/parse", authenticate, requireAseRole, parseLeadPhone);
 router.post("/import-csv/preview", authenticate, requireAseRole, previewCsv);
 router.post("/import-csv", authenticate, requireAseRole, importCsv);
 router.get("/import-jobs", authenticate, requireAseRole, listImportJobs);

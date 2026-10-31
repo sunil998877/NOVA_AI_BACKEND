@@ -23,6 +23,26 @@ test("intake defaults consent to UNKNOWN and never treats it as GRANTED", () => 
     assert.equal(consentFromIntake(null, "no", "CSV_IMPORT").status, CONSENT_STATUSES.DENIED);
 });
 
+test("MANUAL and API intake grant channel consent when the channel is present and not denied", () => {
+    const manual = normalizeLead({
+        email: "ops@acme.example",
+        phone: "+15551230000",
+        source: "MANUAL",
+        consentEmail: true,
+    });
+    assert.equal(manual.email_consent.status, CONSENT_STATUSES.GRANTED);
+    assert.equal(manual.voice_consent.status, CONSENT_STATUSES.GRANTED);
+
+    const denied = normalizeLead({
+        email: "ops@acme.example",
+        phone: "+15551230000",
+        source: "API",
+        consentEmail: true,
+        consentVoice: "no",
+    });
+    assert.equal(denied.voice_consent.status, CONSENT_STATUSES.DENIED);
+});
+
 test("UNKNOWN email consent cannot dispatch autonomous email", () => {
     const unknownLead = { email: "unknown@consent.example", email_consent: { status: "UNKNOWN" } };
     assert.equal(isConsentGranted(unknownLead.email_consent), false);

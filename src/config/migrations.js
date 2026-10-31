@@ -800,7 +800,79 @@ export async function runMigrations(pool) {
         migrateFollowUpSequences(pool),
         migrateOrgOperatingMode(pool),
         migrateUncheckedVoiceConsentToUnknown(pool),
+        migrateLeadPhoneInternational(pool),
+        migrateCadenceScale(pool),
     ]);
+}
+
+const CADENCE_OPEN_SLOT_SQL = "CASE WHEN status IN ('ACTIVE', 'PAUSED', 'NEEDS_REVIEW', 'HANDOFF', 'CALLBACK', 'REPLIED') THEN 1 ELSE NULL END";
+
+async function migrateCadenceScale(pool) {
+    try {
+        const [cols] = await pool.query(
+            `SELECT GENERATION_EXPRESSION FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ase_cadence_enrollments' AND COLUMN_NAME = 'open_slot'`
+        );
+        if (cols.length && !/REPLIED/i.test(String(cols[0].GENERATION_EXPRESSION || ""))) {
+            await pool.query(`ALTER TABLE ase_cadence_enrollments MODIFY open_slot TINYINT GENERATED ALWAYS AS (${CADENCE_OPEN_SLOT_SQL}) STORED`);
+            console.log("[Migration] Updated ase_cadence_enrollments.open_slot to cover held statuses");
+        }
+        const indexes = [
+            ["leads", "idx_leads_due_action", "(next_action, next_action_time)"],
+            ["ase_cadence_enrollments", "idx_cadence_enr_sweep", "(status, last_event_at)"],
+        ];
+        for (const [table, name, columns] of indexes) {
+            const [idx] = await pool.query(
+                `SELECT INDEX_NAME FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+                [table, name]
+            );
+            if (!idx.length) {
+                await pool.query(`CREATE INDEX ${name} ON ${table} ${columns}`);
+                console.log(`[Migration] Added ${name} on ${table}`);
+            }
+        }
+    } catch (error) {
+        console.warn("[Migration] cadence scale warning:", error.message);
+    }
+}
+
+async function migrateLeadPhoneInternational(pool) {
+    try {
+        const [cols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads'`
+        );
+        const existing = new Set(cols.map((row) => row.COLUMN_NAME));
+        const additions = [
+            ["phone_e164", "VARCHAR(32) NULL"],
+            ["phone_original", "VARCHAR(64) NULL"],
+            ["phone_country", "CHAR(2) NULL"],
+            ["phone_calling_code", "VARCHAR(8) NULL"],
+            ["phone_validation", "VARCHAR(32) NULL"],
+        ];
+        for (const [name, definition] of additions) {
+            if (!existing.has(name)) {
+                await pool.query(`ALTER TABLE leads ADD COLUMN ${name} ${definition}`);
+                console.log(`[Migration] Added column '${name}' to leads`);
+            }
+        }
+        await pool.query(
+            `UPDATE leads
+             SET phone_original = COALESCE(phone_original, phone),
+                 phone_e164 = COALESCE(phone_e164, CASE WHEN phone LIKE '+%' THEN phone ELSE NULL END)
+             WHERE phone IS NOT NULL AND phone <> '' AND phone_original IS NULL`
+        );
+        const [idx] = await pool.query(
+            `SELECT INDEX_NAME FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads' AND INDEX_NAME = 'idx_leads_phone_e164'`
+        );
+        if (!idx.length) {
+            await pool.query("CREATE INDEX idx_leads_phone_e164 ON leads (organization_id, phone_e164)");
+        }
+    } catch (error) {
+        console.warn("[Migration] lead phone international warning:", error.message);
+    }
 }
 
 async function migrateUncheckedVoiceConsentToUnknown(pool) {

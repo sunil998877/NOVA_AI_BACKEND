@@ -61,9 +61,12 @@ export async function validateDispatchEligibility(lead, action, options = {}) {
         }
     }
 
-    const activeEnrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
-    if (activeEnrollment && !options.isEngagementTrigger && lead.status !== "ENGAGED") {
-        return { eligible: false, reason: "Lead is actively enrolled in follow-up sequence cadence" };
+    const cadence = Boolean(options.cadence);
+    if (!cadence) {
+        const activeEnrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
+        if (activeEnrollment && !options.isEngagementTrigger && lead.status !== "ENGAGED") {
+            return { eligible: false, reason: "Lead is actively enrolled in follow-up sequence cadence" };
+        }
     }
 
     const counters = typeof lead.attempt_counters === "string"
@@ -79,7 +82,7 @@ export async function validateDispatchEligibility(lead, action, options = {}) {
             await logComplianceBlock(orgId, lead.id, "EMAIL", consentReason);
             return { eligible: false, reason: consentReason };
         }
-        if (Number(counters.email || 0) >= MAX_EMAILS) {
+        if (!cadence && Number(counters.email || 0) >= MAX_EMAILS) {
             return { eligible: false, reason: "Maximum email fatigue limit reached" };
         }
     }
@@ -97,10 +100,10 @@ export async function validateDispatchEligibility(lead, action, options = {}) {
             await logComplianceBlock(orgId, lead.id, "VOICE", consentReason);
             return { eligible: false, reason: consentReason };
         }
-        if (Number(counters.voice || 0) >= MAX_CALLS) {
+        if (!cadence && Number(counters.voice || 0) >= MAX_CALLS) {
             return { eligible: false, reason: "Maximum call fatigue limit reached" };
         }
-        if (!options.bypassCallingHours && !isWithinCallingHours(lead, options)) {
+        if (!cadence && !options.bypassCallingHours && !isWithinCallingHours(lead, options)) {
             return { eligible: false, reason: "Outside allowed calling hours" };
         }
     }

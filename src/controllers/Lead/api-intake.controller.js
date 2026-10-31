@@ -78,6 +78,8 @@ export const ingestLeadsFromApi = asyncHandler(async (req, res) => {
         return res.status(error.statusCode || 400).json({
             error: error.message,
             field: error.field || null,
+            code: error.code || null,
+            details: error.details || null,
         });
     }
 });
