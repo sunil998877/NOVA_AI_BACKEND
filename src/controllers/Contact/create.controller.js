@@ -16,11 +16,19 @@ export const createContact = asyncHandler(async (req, res) => {
     }
     
 
+    const normalizedEmail = String(email).trim().toLowerCase();
     const contact = await Contact.upsert({
         name: String(name).trim(),
-        email: String(email).trim(),
+        email: normalizedEmail,
         company: company ? String(company).trim() : null,
     });
 
-    return res.status(200).json({ data: contact });
+    if (!contact?.id) {
+        return res.status(500).json({ error: "Failed to save contact" });
+    }
+
+    return res.status(200).json({
+        success: true,
+        data: contact,
+    });
 });

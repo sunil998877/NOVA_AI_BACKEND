@@ -475,7 +475,12 @@ export const approveAndSendLeadEmail = asyncHandler(async (req, res) => {
 
     try {
         const prepared = await prepareLeadApproval(orgId, lead.id, userId, { actionType: "EMAIL" });
-        const result = await aseScheduler.processLeadAction(prepared.lead, { approved: true, force: true });
+        // approved = AI_RECOMMENDED gate; manual = HUMAN_ESCALATION gate; force = skip timing/cadence intercept
+        const result = await aseScheduler.processLeadAction(prepared.lead, {
+            approved: true,
+            force: true,
+            manual: true,
+        });
         const fresh = await Lead.findById(lead.id, orgId);
         if (!result?.executed) {
             return res.status(400).json({

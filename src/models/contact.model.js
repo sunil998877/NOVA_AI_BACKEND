@@ -64,7 +64,22 @@ export const Contact = {
     async upsert(data) {
         const email = String(data.email).toLowerCase().trim();
         const existing = await this.findByEmail(email);
-        if (existing) return existing;
+        if (existing) {
+            const nextName = data.name != null ? String(data.name).trim() : existing.name;
+            const trimmedCompany =
+                data.company != null && String(data.company).trim()
+                    ? String(data.company).trim()
+                    : null;
+            // Keep existing company when manual add leaves company blank
+            const nextCompany = trimmedCompany || existing.company || null;
+            if (nextName !== existing.name || nextCompany !== existing.company) {
+                return this.updateById(existing.id, {
+                    name: nextName,
+                    company: nextCompany,
+                });
+            }
+            return existing;
+        }
         return this.create({ ...data, email });
     },
 

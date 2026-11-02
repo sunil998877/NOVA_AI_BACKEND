@@ -102,9 +102,20 @@ export async function processCompanyResearchJob(job) {
         // Still try a conservative draft so the UI does not spin forever.
         const queued = await enqueueEmailPersonalizationJob(latest || lead, research);
         if (!queued) {
-            await storeOutreachDraft(latest || lead, research).catch((err) => {
+            try {
+                await storeOutreachDraft(latest || lead, research);
+            } catch (err) {
                 console.warn(`[CompanyResearch] conservative draft failed for lead ${lead.id}: ${err.message}`);
-            });
+                const failedLead = await Lead.findById(lead.id, orgId).catch(() => null);
+                const failedMeta = readMetadata(failedLead || latest || lead);
+                await Lead.updateById(lead.id, {
+                    metadata: {
+                        ...failedMeta,
+                        outreach_status: "failed",
+                        outreach_error: err.message || "draft_failed",
+                    },
+                }, orgId).catch(() => {});
+            }
         }
 
         emitOrgEvent(orgId, "company_research_failed", { jobId: job.id, leadId: Number(lead.id), status: "failed" });
