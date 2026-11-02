@@ -18,6 +18,7 @@ import {
     shouldQueueHumanHandoff,
 } from "./outcomeNormalizer.service.js";
 import { isAlreadyHumanHandoff, queueCallbackHandoff } from "./callbackHandoff.service.js";
+import { HANDOFF_STATUSES, setHandoffStatus } from "./handoffStatus.service.js";
 import {
     CALLBACK_PROMISE_SPEECH,
     FINISHED_CALL_EVENTS,
@@ -251,7 +252,8 @@ export async function attemptWarmTransfer(lead, rawData = {}, deps = {}) {
     }
 
     const transition = transitionLeadState(lead.status, "WARM_TRANSFER", { reason: "live_interest" });
-    await followUpEngine.handleMeetingBooked(lead.id, orgId).catch(() => {});
+    await followUpEngine.handleHumanHandoff(lead.id, orgId, "Live warm transfer to a sales rep").catch(() => {});
+    await setHandoffStatus(lead, HANDOFF_STATUSES.HANDOFF_REQUESTED, { source: "VOICE", reason: "Warm transfer to a sales rep", callId }).catch(() => {});
     await AseExecution.cancelOpenForLead(orgId, lead.id, "Warm transfer — no second bot call").catch(() => 0);
 
     const updated = await Lead.updateById(

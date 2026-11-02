@@ -259,6 +259,55 @@ describe("Smart cadence end-to-end (live DB, simulated providers)", () => {
         assert.equal(list.length, 1, "no retry created after stop");
     });
 
+    test("CSV/API intake auto-enrolls a phone lead into call:1 cadence", async () => {
+        const { processLead } = await import("../services/leads/leadIntake.service.js");
+        const prevSkip = process.env.ASE_SKIP_OUTREACH;
+        process.env.ASE_SKIP_OUTREACH = "1";
+        const stamp = Date.now();
+        try {
+            const created = await processLead({
+                email: `intake.auto.${stamp}@acmelogistics.example`,
+                name: "Rahul Intake",
+                firstName: "Rahul",
+                company: "Acme Intake Logistics",
+                phone: "+919000009801",
+            }, { organizationId: ORG, userId: 1, source: "CSV_IMPORT", matchDomain: false });
+
+            assert.equal(created.status, "created");
+            assert.equal(created.cadence?.enrolled, true);
+            assert.equal(created.lead.next_action, "CADENCE");
+            const open = await CadenceEnrollment.findOpenByLead(ORG, created.lead.id);
+            assert.ok(open);
+            const list = await steps(open.id);
+            assert.equal(list.length, 1);
+            assert.equal(list[0].step_key, "call:1");
+            await cadence.stopCadence(ORG, created.lead.id, 1, "Test cleanup");
+
+            const noPhone = await processLead({
+                email: `intake.nophone.${stamp}@acmelogistics.example`,
+                name: "Rahul Email",
+                firstName: "Rahul",
+                company: "Acme Intake Logistics",
+            }, { organizationId: ORG, userId: 1, source: "CSV_IMPORT", matchDomain: false });
+            assert.equal(noPhone.status, "created");
+            assert.equal(noPhone.cadence?.enrolled, false);
+
+            const optedOut = await processLead({
+                email: `intake.off.${stamp}@acmelogistics.example`,
+                name: "Rahul Off",
+                firstName: "Rahul",
+                company: "Acme Intake Logistics",
+                phone: "+919000009802",
+            }, { organizationId: ORG, userId: 1, source: "CSV_IMPORT", matchDomain: false, autoEnroll: false });
+            assert.equal(optedOut.status, "created");
+            assert.equal(optedOut.cadence?.enrolled, false);
+            assert.equal(optedOut.cadence?.reason, "DISABLED");
+        } finally {
+            if (prevSkip === undefined) delete process.env.ASE_SKIP_OUTREACH;
+            else process.env.ASE_SKIP_OUTREACH = prevSkip;
+        }
+    });
+
     test("queue filters return the right rows", async () => {
         const pending = await cadence.listQueue(ORG, { filter: "email_pending_approval" });
         assert.ok(Array.isArray(pending.items));

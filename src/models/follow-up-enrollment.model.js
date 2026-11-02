@@ -6,6 +6,7 @@ const { table, columns } = followUpEnrollmentSchema;
 
 const TERMINAL_STATES = new Set([
     "stopped_meeting_booked",
+    "stopped_handoff",
     "stopped_unsubscribed",
     "stopped_do_not_contact",
     "completed",
@@ -236,6 +237,18 @@ export const FollowUpEnrollment = {
             {
                 status: "stopped_meeting_booked",
                 paused_reason: "Sales meeting booked",
+                completed_at: new Date(),
+            },
+            orgId
+        );
+    },
+
+    async markHandedOff(id, reason = "Handed to a sales rep", orgId = 1) {
+        return this.updateById(
+            id,
+            {
+                status: "stopped_handoff",
+                paused_reason: reason,
                 completed_at: new Date(),
             },
             orgId

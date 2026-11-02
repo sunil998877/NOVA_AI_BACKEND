@@ -1,6 +1,6 @@
 export function formatFirstName(value) {
     const raw = String(value || "").trim();
-    if (!raw) return "there";
+    if (!raw || raw.toLowerCase() === "there") return "there";
     return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
@@ -22,13 +22,20 @@ export function sanitizeOutreachBody(text, senderName = "NOVA AI") {
         return `${g} ${formatFirstName(name)}`;
     });
 
-    if (/Best regards/i.test(out)) {
-        out = out.replace(/\s*Best regards[\s\S]*$/i, `\n\nBest regards,\n${senderName}`);
-    } else {
-        out = `${out.trim()}\n\nBest regards,\n${senderName}`;
-    }
+    out = stripSignoff(out.replace(/\s*Best regards[\s\S]*$/i, ""));
+    out = `${out}\n\nBest regards,\n${senderName}`;
 
     return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+export function stripSignoff(text) {
+    let out = String(text || "").replace(/\r\n/g, "\n").trim();
+    for (let i = 0; i < 2; i += 1) {
+        out = out
+            .replace(/\n+[ \t]*(thank you|thanks|regards|best|best regards|kind regards|warm regards|many thanks|sincerely|cheers)[ \t]*[,!.]?[ \t]*(\n[^\n]{0,60}){0,3}\s*$/i, "")
+            .trim();
+    }
+    return out;
 }
 
 export function sanitizeOutreachEmail(email = {}, senderName = "NOVA AI") {

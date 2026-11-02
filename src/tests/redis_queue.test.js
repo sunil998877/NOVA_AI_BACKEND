@@ -75,9 +75,10 @@ test("queue names and job ids stay stable", () => {
     assert.equal(QUEUE_NAMES.ASE_ACTIONS, "ase-actions");
     assert.equal(QUEUE_NAMES.COMPANY_RESEARCH, "nova-company-research");
     assert.equal(JOB_NAMES.RESEARCH_COMPANY, "research_company");
-    assert.equal(CACHE_KEYS.RESEARCH("acme.com"), "company:research:acme.com");
+    assert.equal(CACHE_KEYS.RESEARCH(7, "acme.com"), "company:research:7:acme.com");
+    assert.notEqual(CACHE_KEYS.RESEARCH(7, "acme.com"), CACHE_KEYS.RESEARCH(8, "acme.com"));
     assert.equal(CACHE_KEYS.PROFILE(1, "acme"), "company:profile:1:acme");
-    assert.equal(RESEARCH_CACHE_SCHEMA, 2);
+    assert.equal(RESEARCH_CACHE_SCHEMA, 3);
 });
 
 test("cache miss is safe when Redis is down", async () => {

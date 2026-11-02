@@ -188,7 +188,7 @@ describe("Automated Cold Email Follow-Up Sequence Suite", () => {
         });
 
         const enrollmentAfter = await FollowUpEnrollment.findById(activeBefore.id, testOrgId);
-        assert.equal(enrollmentAfter.status, "REPLIED");
+        assert.equal(enrollmentAfter.status, "paused_reply_received");
 
         const pendingTasks = await FollowUpTask.findByEnrollmentId(activeBefore.id, testOrgId);
         const nonCancelled = pendingTasks.filter((t) => t.status === "SCHEDULED" || t.status === "PROCESSING");
@@ -218,7 +218,7 @@ describe("Automated Cold Email Follow-Up Sequence Suite", () => {
         await followUpEngine.handleMeetingBooked(lead2.id, testOrgId);
 
         const afterMeeting = await FollowUpEnrollment.findById(enrolled.enrollment.id, testOrgId);
-        assert.equal(afterMeeting.status, "MEETING_BOOKED");
+        assert.equal(afterMeeting.status, "stopped_meeting_booked");
 
         const tasks = await FollowUpTask.findByEnrollmentId(enrolled.enrollment.id, testOrgId);
         const remaining = tasks.filter((t) => t.status === "SCHEDULED");
@@ -244,7 +244,7 @@ describe("Automated Cold Email Follow-Up Sequence Suite", () => {
         await followUpEngine.handleSuppression(lead3.id, testOrgId);
 
         const afterSuppression = await FollowUpEnrollment.findById(enrolled.enrollment.id, testOrgId);
-        assert.equal(afterSuppression.status, "CANCELLED");
+        assert.equal(afterSuppression.status, "stopped_do_not_contact");
     });
 });
 

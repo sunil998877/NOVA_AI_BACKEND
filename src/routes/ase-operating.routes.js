@@ -30,6 +30,17 @@ import {
     stopLeadCadence,
     updatePolicy,
 } from "../controllers/Ase/cadence.controller.js";
+import { approveDraft, editDraft, getDraft, listDrafts, rejectDraft, sendDraft } from "../controllers/Ase/replyDraft.controller.js";
+import {
+    bookMeetingNow,
+    cancelMeetingById,
+    createLeadMeetingRequest,
+    getLeadMeetingState,
+    getMeeting,
+    listOrgMeetings,
+    rescheduleMeetingById,
+    updateMeetingPreferences,
+} from "../controllers/Ase/meeting.controller.js";
 
 const router = Router();
 
@@ -70,5 +81,21 @@ router.post("/cadence/leads/:leadId/stop", authenticate, requireAseRole, stopLea
 router.post("/cadence/steps/:stepId/approve", authenticate, requireAseRole, approveStep);
 router.post("/cadence/steps/:stepId/reject", authenticate, requireAseRole, rejectStep);
 router.post("/cadence/steps/:stepId/review", authenticate, requireAseRole, resolveReview);
+
+router.get("/reply-drafts", authenticate, requireAseRole, listDrafts);
+router.get("/reply-drafts/:id", authenticate, requireAseRole, getDraft);
+router.patch("/reply-drafts/:id", authenticate, requireAseRole, editDraft);
+router.post("/reply-drafts/:id/approve", authenticate, requireAseRole, approveDraft);
+router.post("/reply-drafts/:id/reject", authenticate, requireAseRole, rejectDraft);
+router.post("/reply-drafts/:id/send", authenticate, requireAseRole, sendDraft);
+
+router.get("/meetings", authenticate, requireAseRole, listOrgMeetings);
+router.get("/meetings/:id", authenticate, requireAseRole, getMeeting);
+router.get("/leads/:leadId/meetings", authenticate, requireAseRole, getLeadMeetingState);
+router.post("/leads/:leadId/meetings", authenticate, requireAseRole, createLeadMeetingRequest);
+router.patch("/meetings/:id", authenticate, requireAseRole, updateMeetingPreferences);
+router.post("/meetings/:id/book", authenticate, requireAseRole, bookMeetingNow);
+router.post("/meetings/:id/reschedule", authenticate, requireAseRole, rescheduleMeetingById);
+router.post("/meetings/:id/cancel", authenticate, requireAseRole, cancelMeetingById);
 
 export default router;

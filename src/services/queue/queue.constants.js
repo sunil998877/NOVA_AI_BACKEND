@@ -17,14 +17,14 @@ export const JOB_NAMES = Object.freeze({
 });
 
 export const CACHE_KEYS = Object.freeze({
-    RESEARCH: (domain) => `company:research:${domain}`,
+    RESEARCH: (orgId, domain) => `company:research:${orgId}:${domain}`,
     PROFILE: (orgId, companyId) => `company:profile:${orgId}:${companyId}`,
     CAMPAIGN: (campaignId) => `campaign:config:${campaignId}`,
     LOCK: (name) => `lock:${name}`,
     RATE: (name) => `rate:${name}`,
 });
 
-export const RESEARCH_CACHE_SCHEMA = 2;
+export const RESEARCH_CACHE_SCHEMA = 3;
 
 export const DEFAULT_JOB_OPTIONS = Object.freeze({
     attempts: 5,

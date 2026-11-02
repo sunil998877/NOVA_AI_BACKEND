@@ -97,8 +97,8 @@ export async function loadOutcomeCounts(orgId) {
         ),
         query(
             `SELECT COUNT(*) AS meetings
-             FROM follow_up_enrollments
-             WHERE organization_id = ? AND status = 'stopped_meeting_booked'`,
+             FROM sales_meetings
+             WHERE organization_id = ? AND status = 'MEETING_BOOKED' AND calendar_event_id IS NOT NULL`,
             [id]
         ).catch(() => [{ meetings: 0 }]),
     ]);

@@ -1,12 +1,12 @@
 import { getOpenAiClient } from "../../../controllers/OpenAI/client.js";
 import { env } from "../../../config/env.js";
-import { bodyToHtml, formatFirstName, sanitizeOutreachEmail } from "../../../utils/outreachEmail.js";
+import { bodyToHtml, formatFirstName, sanitizeOutreachEmail, stripSignoff } from "../../../utils/outreachEmail.js";
 import { validateEmailDraft } from "../emailQuality.service.js";
 import { getActivePlaybook, playbookFactsForAi } from "../salesPlaybook.service.js";
-import { isUsableResearchProfile, researchCompany } from "../companyResearch.service.js";
+import { isGroundedResearch, isUsableResearchProfile, researchCompany } from "../companyResearch.service.js";
 import { STEP_PURPOSE } from "./cadence.constants.js";
+import { formatSignalsForPrompt } from "../../../modules/intelligence/services/signals.service.js";
 
-const GROUNDED_QUALITY = new Set(["HIGH_CONFIDENCE", "ACCEPTABLE", "PARTIAL_RESEARCH"]);
 const PURPOSE_BRIEF = {
     [STEP_PURPOSE.MISSED_CALL_EMAIL]: "We called and could not reach the prospect. Say plainly that we tried to call and could not connect. Never imply any conversation happened. Give one short reason the call was relevant, then ask for a convenient time.",
     [STEP_PURPOSE.VALUE_EMAIL]: "Share one specific, relevant value point from the seller facts that fits the prospect's business. Do not repeat earlier emails. Ask one low-friction question.",
@@ -23,11 +23,7 @@ function readMetadata(lead) {
     }
 }
 
-export function isGroundedResearch(research) {
-    if (!isUsableResearchProfile(research)) return false;
-    const hasSources = Array.isArray(research.sources) && research.sources.some((s) => s?.url);
-    return hasSources && GROUNDED_QUALITY.has(String(research.qualityStatus || "").toUpperCase());
-}
+export { isGroundedResearch };
 
 function firstSentence(text, max = 180) {
     const clean = String(text || "").replace(/\s+/g, " ").trim();
@@ -79,7 +75,7 @@ export function buildCadenceTemplate({ purpose, firstName, company, senderName, 
 
 async function writeWithAi({ client, purpose, firstName, company, senderName, brandName, research, grounded, seller, previousBodies }) {
     const facts = grounded
-        ? `Verified prospect research (from ${research.sources.map((s) => s.url).slice(0, 3).join(", ")}):\nSummary: ${research.summary}\nIndustry: ${research.industry || ""}\nServices: ${research.coreServices || ""}`
+        ? `Verified prospect research (from ${research.sources.map((s) => s.url).slice(0, 3).join(", ")}):\nSummary: ${research.summary}\nIndustry: ${research.industry || ""}\nServices: ${research.coreServices || ""}\n${formatSignalsForPrompt(research)}`
         : "No verified prospect research is available. Do not describe the prospect's business at all.";
     const completion = await client.chat.completions.create({
         model: process.env.ASE_RESEARCH_MODEL || "gpt-4o-mini",
@@ -111,12 +107,7 @@ Subject under 9 words. Body under 120 words. One clear call to action.`,
     return { subject: String(parsed.subject), text, html: bodyToHtml(text) };
 }
 
-export function stripSignoff(text) {
-    return String(text || "")
-        .replace(/\r\n/g, "\n")
-        .replace(/\n+[ \t]*(thank you|thanks|regards|best|best regards|kind regards|warm regards|many thanks|sincerely|cheers)[ \t]*[,!.]?[ \t]*(\n[^\n]{0,60}){0,3}\s*$/i, "")
-        .trim();
-}
+export { stripSignoff };
 
 async function resolveResearch(lead) {
     const meta = readMetadata(lead);

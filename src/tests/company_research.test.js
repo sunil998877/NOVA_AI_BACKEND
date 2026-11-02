@@ -86,6 +86,66 @@ describe("SSRF protection", () => {
     });
 });
 
+describe("evidence grounding and research state", () => {
+    const nameOnly = {
+        company: "Acme",
+        domain: "acme.in",
+        summary: "Acme is a leading logistics provider serving Fortune 500 clients.",
+        source: "openai_company_lookup",
+        sources: [],
+        qualityStatus: "NEEDS_REVIEW",
+    };
+
+    test("name-only model lookup is never grounded, even if relabelled or given a URL", () => {
+        assert.equal(isGroundedResearch(nameOnly), false);
+        assert.equal(isGroundedResearch({ ...nameOnly, qualityStatus: "PARTIAL_RESEARCH" }), false);
+        assert.equal(isGroundedResearch({ ...nameOnly, qualityStatus: "ACCEPTABLE", sources: [{ url: "https://acme.in/" }] }), false);
+    });
+
+    test("fallback email does not quote an ungrounded summary", async () => {
+        const { draftCompanyPersonalizedEmail } = await import("../services/ase/leadEmailDrafter.service.js");
+        const lead = { id: 1, organization_id: 9, first_name: "Asha", company: "Acme", email: "asha@gmail.com", metadata: { company_research: nameOnly } };
+        const drafted = await draftCompanyPersonalizedEmail(lead, { senderName: "Nova" }).catch(() => null);
+        if (!drafted) return;
+        assert.doesNotMatch(`${drafted.subject} ${drafted.text}`, /Fortune 500|leading logistics/);
+    });
+
+    test("voice context drops ungrounded research", async () => {
+        const { PlivoVoiceAdapter } = await import("../services/ase/adapters/plivoVoice.adapter.js").catch(() => ({}));
+        if (!PlivoVoiceAdapter) return;
+        const adapter = Object.create(PlivoVoiceAdapter.prototype);
+        assert.equal(adapter.readCompanyResearch({ metadata: { company_research: nameOnly } }), null);
+        assert.doesNotMatch(adapter.buildCallSpeech({ name: "Asha", company: "Acme", metadata: { company_research: nameOnly } }), /Fortune 500/);
+    });
+
+    test("failed research no longer blocks the scheduler", async () => {
+        const { isCompanyResearchPending } = await import("../services/ase/companyResearch.service.js");
+        assert.equal(isCompanyResearchPending({ company: "Acme", metadata: { company_research_status: "pending" } }), true);
+        assert.equal(isCompanyResearchPending({ company: "Acme", metadata: { company_research_status: "failed" } }), false);
+    });
+});
+
+describe("third-party reference matching", () => {
+    test("accepts a reference only when its official site is the lead's domain", async () => {
+        const { matchesCompanyDomain } = await import("../services/ase/companyReference.service.js");
+        assert.equal(matchesCompanyDomain({ officialSites: ["https://www.swiggy.com/"], entityLabel: "Swiggy", domain: "swiggy.com", companyName: "Swiggy" }), true);
+        assert.equal(matchesCompanyDomain({ officialSites: ["https://www.tcs.com"], entityLabel: "Tata Consultancy Services", domain: "tcs.com", companyName: "TCS" }), true);
+        assert.equal(matchesCompanyDomain({ officialSites: ["https://www.amazon.com"], entityLabel: "Amazon", domain: "amazon.in", companyName: "Amazon" }), true);
+        assert.equal(matchesCompanyDomain({ officialSites: ["https://www.amazon.com"], entityLabel: "Amazon", domain: "amazonplumbing.co.in", companyName: "Amazon" }), false);
+        assert.equal(matchesCompanyDomain({ officialSites: ["https://www.apple.com"], entityLabel: "Apple Inc.", domain: "appletiles-india.com", companyName: "Apple" }), false);
+        assert.equal(matchesCompanyDomain({ officialSites: [], entityLabel: "Infosys", domain: "infosys.com", companyName: "Infosys" }), false);
+    });
+});
+
+describe("outreach body signoff", () => {
+    test("a model-written signoff is replaced, never doubled", async () => {
+        const { sanitizeOutreachBody } = await import("../utils/outreachEmail.js");
+        const out = sanitizeOutreachBody("Hi Asha,\n\nWould a short chat help?\n\nBest,\nNova", "Nova");
+        assert.equal(out, "Hi Asha,\n\nWould a short chat help?\n\nBest regards,\nNova");
+        assert.equal((out.match(/Nova/g) || []).length, 1);
+    });
+});
+
 describe("cadence email signoff cleanup", () => {
     test("removes a model-written signoff so the template signoff is not doubled", () => {
         const body = "Hi Asha,\n\nI tried calling you today but could not reach you.\n\nBest regards,\nNOVA AI";

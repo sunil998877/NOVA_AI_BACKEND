@@ -12,18 +12,11 @@ import { getIo } from "../../socket/socketServer.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { ASE_OUTCOMES } from "../ase/outcomeNormalizer.service.js";
 import { env } from "../../config/env.js";
-import { unifiedDeliveryService } from "../email/unifiedDelivery.service.js";
 
 function resolveReplyOutcome(raw) {
     if (!raw) return ASE_OUTCOMES.AMBIGUOUS;
     if (typeof raw === "string") return raw;
     return raw.normalizedOutcome || raw.outcome || ASE_OUTCOMES.AMBIGUOUS;
-}
-
-function shouldSkipReplySend() {
-    return process.env.ASE_SKIP_OUTREACH === "1"
-        || process.env.NODE_ENV === "test"
-        || typeof process.env.NODE_TEST_CONTEXT !== "undefined";
 }
 
 const DEFAULT_SCHEDULE = [
@@ -178,7 +171,7 @@ export const followUpEngine = {
             return { status: "skipped", reason: "suppressed" };
         }
 
-        if (lead.status === "MEETING_BOOKED") {
+        if (lead.status === "MEETING_BOOKED" || lead.handoff_status === "MEETING_BOOKED") {
             await LeadEvent.create({
                 organization_id: orgId,
                 lead_id: lead.id,
@@ -194,7 +187,7 @@ export const followUpEngine = {
         const existingList = await FollowUpEnrollment.findByLeadId(lead.id, orgId);
         if (existingList && existingList.length > 0) {
             const existing = existingList[0];
-            const terminalStates = new Set(["stopped_meeting_booked", "stopped_unsubscribed", "stopped_do_not_contact", "completed", "stopped"]);
+            const terminalStates = new Set(["stopped_meeting_booked", "stopped_handoff", "stopped_unsubscribed", "stopped_do_not_contact", "completed", "stopped"]);
             if (terminalStates.has(existing.status)) {
                 return { status: "skipped", reason: "terminal_state", enrollment: existing };
             }
@@ -467,13 +460,35 @@ export const followUpEngine = {
         return { matched: false, ambiguous: false, reason: "No matching lead found" };
     },
 
+    /** Pauses or stops the sequence, then queues a reply draft for human approval. Never sends a reply itself. */
     async handleLeadReply(lead, replyPayload = {}, matchedEnrollment = null) {
         if (!lead || !lead.id) return null;
+        const sequence = await this.applyReplyToSequence(lead, replyPayload, matchedEnrollment);
+        let ingested = null;
+        try {
+            const { ingestReply } = await import("../ase/replyApproval.service.js");
+            ingested = await ingestReply(
+                lead,
+                { ...replyPayload, outcome: resolveReplyOutcome(replyPayload.outcome) },
+                { enrollment: matchedEnrollment }
+            );
+        } catch (err) {
+            console.warn("[FollowUp] Reply ingestion failed:", err.message);
+        }
+        const draft = ingested?.draft || null;
+        if (!sequence) {
+            return draft || ingested?.inbound
+                ? { paused: false, status: "reply_handled", enrollmentId: null, draft, sent: false, duplicate: Boolean(ingested?.duplicate) }
+                : null;
+        }
+        return { ...sequence, draft, sent: false, duplicate: Boolean(ingested?.duplicate) };
+    },
+
+    async applyReplyToSequence(lead, replyPayload = {}, matchedEnrollment = null) {
         const orgId = Number(lead.organization_id || 1);
         const enrollment = matchedEnrollment || await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
         const outcome = resolveReplyOutcome(replyPayload.outcome);
         const replySubject = replyPayload.subject || "Reply received";
-        const replyText = replyPayload.replyText || replyPayload.body || "";
         const messageId = replyPayload.messageId || null;
 
         try {
@@ -563,8 +578,8 @@ export const followUpEngine = {
         }
 
         if (enrollment && outcome === ASE_OUTCOMES.CALLBACK) {
-            await FollowUpEnrollment.markMeetingBooked(enrollment.id, orgId);
-            await FollowUpTask.cancelRemaining(enrollment.id, "Sales meeting or call requested", "CANCELLED", orgId);
+            await FollowUpEnrollment.markHandedOff(enrollment.id, "Prospect requested a call; handed to a sales rep", orgId);
+            await FollowUpTask.cancelRemaining(enrollment.id, "Call requested; handed to a sales rep", "CANCELLED", orgId);
 
             await LeadEvent.create({
                 organization_id: orgId,
@@ -575,13 +590,13 @@ export const followUpEngine = {
                 status: "COMPLETED",
                 payload: {
                     enrollmentId: enrollment?.id || null,
-                    reason: "Sales call requested; promotional sequence stopped",
+                    reason: "Call requested; promotional sequence stopped and handed to a sales rep (no meeting booked)",
                     outcome: "OUTCOME_CALLBACK",
                 },
-                idempotency_key: `lead_${lead.id}_meeting_stop_${enrollment.id}_${messageId || Date.now()}`,
+                idempotency_key: `lead_${lead.id}_handoff_stop_${enrollment.id}_${messageId || Date.now()}`,
             });
 
-            return { stopped: true, status: "stopped_meeting_booked", enrollmentId: enrollment.id };
+            return { stopped: true, status: "stopped_handoff", enrollmentId: enrollment.id };
         }
 
         if (enrollment) {
@@ -591,84 +606,6 @@ export const followUpEngine = {
                 orgId
             );
             await FollowUpTask.blockRemainingForReply(enrollment.id, `Prospect reply received (${outcome})`, orgId);
-        }
-
-        let draft = null;
-        let sent = null;
-        const shouldReply = outcome !== ASE_OUTCOMES.DNC && outcome !== ASE_OUTCOMES.OOO;
-        if (shouldReply) {
-            draft = await followUpContentService.generateResponseDraft(lead, {
-                subject: replySubject,
-                replyText,
-            }, {
-                subject: enrollment?.initial_subject,
-                senderName: env.novaSenderName || "NOVA AI",
-                research: lead.metadata?.company_research,
-            });
-
-            await LeadEvent.create({
-                organization_id: orgId,
-                lead_id: lead.id,
-                user_id: lead.user_id || null,
-                channel: "EMAIL",
-                event_type: "AI_RESPONSE_DRAFTED",
-                status: "DRAFT",
-                payload: {
-                    enrollmentId: enrollment?.id || null,
-                    subject: draft.subject,
-                    bodyText: draft.text,
-                    bodyHtml: draft.html,
-                },
-                idempotency_key: `lead_${lead.id}_response_draft_${enrollment?.id || "none"}_${messageId || Date.now()}`,
-            });
-
-            if (!shouldSkipReplySend() && lead.email && draft?.subject && (draft.text || draft.html)) {
-                try {
-                    const headers = {};
-                    if (messageId) {
-                        headers["In-Reply-To"] = messageId;
-                        headers["References"] = messageId;
-                    }
-                    const delivery = await unifiedDeliveryService.deliverSingle({
-                        orgId,
-                        to: lead.email,
-                        subject: draft.subject,
-                        text: draft.text,
-                        html: draft.html,
-                        headers,
-                        leadId: lead.id,
-                        idempotencyKey: `reply_response_${orgId}_${lead.id}_${messageId || Date.now()}`,
-                    });
-                    sent = delivery;
-                    await LeadEvent.create({
-                        organization_id: orgId,
-                        lead_id: lead.id,
-                        user_id: lead.user_id || null,
-                        channel: "EMAIL",
-                        event_type: delivery.status === "SUCCEEDED" ? "AI_RESPONSE_SENT" : "AI_RESPONSE_FAILED",
-                        status: delivery.status === "SUCCEEDED" ? "SENT" : "FAILED",
-                        payload: {
-                            enrollmentId: enrollment?.id || null,
-                            subject: draft.subject,
-                            bodyText: draft.text,
-                            bodyHtml: draft.html,
-                            messageId: delivery.messageId || null,
-                            error: delivery.error || delivery.skipReason || null,
-                            replyTo: messageId,
-                        },
-                        idempotency_key: `lead_${lead.id}_response_sent_${enrollment?.id || "none"}_${messageId || Date.now()}`,
-                    });
-                } catch (err) {
-                    await LeadEvent.create({
-                        organization_id: orgId,
-                        lead_id: lead.id,
-                        channel: "EMAIL",
-                        event_type: "AI_RESPONSE_FAILED",
-                        status: "FAILED",
-                        payload: { enrollmentId: enrollment?.id || null, subject: draft.subject, error: err.message },
-                    }).catch(() => {});
-                }
-            }
         }
 
         if (enrollment) {
@@ -684,32 +621,46 @@ export const followUpEngine = {
                     reason: `Prospect replied to outreach (${outcome}); automated follow-ups blocked pending review`,
                     replySubject,
                     outcome,
-                    hasDraft: Boolean(draft),
-                    sent: sent?.status === "SUCCEEDED",
                 },
                 idempotency_key: `lead_${lead.id}_reply_pause_${enrollment.id}_${messageId || Date.now()}`,
             });
 
-            const io = getIo();
-            if (io) {
-                io.emit("followup:paused", {
-                    leadId: lead.id,
-                    enrollmentId: enrollment.id,
-                    status: "paused_reply_received",
-                    outcome,
-                    hasDraft: Boolean(draft),
-                    sent: sent?.status === "SUCCEEDED",
-                });
-            }
+            getIo()?.to(`org:${orgId}`).emit("followup:paused", {
+                leadId: lead.id,
+                enrollmentId: enrollment.id,
+                status: "paused_reply_received",
+                outcome,
+            });
         }
 
         return {
             paused: Boolean(enrollment),
             status: enrollment ? "paused_reply_received" : "reply_handled",
             enrollmentId: enrollment?.id || null,
-            draft,
-            sent: sent?.status === "SUCCEEDED",
         };
+    },
+
+    /** A rep has taken over (callback queued, warm transfer); this is not a booked meeting. */
+    async handleHumanHandoff(leadId, orgId = 1, reason = "Handed to a sales rep") {
+        const enrollment = await FollowUpEnrollment.findActiveByLeadId(leadId, orgId);
+        if (!enrollment) return null;
+
+        await FollowUpEnrollment.markHandedOff(enrollment.id, reason, orgId);
+        await FollowUpTask.cancelRemaining(enrollment.id, reason, "CANCELLED", orgId);
+
+        await LeadEvent.create({
+            organization_id: orgId,
+            lead_id: Number(leadId),
+            channel: "SYSTEM",
+            event_type: "FOLLOW_UP_STOPPED",
+            status: "HANDOFF",
+            payload: {
+                enrollmentId: enrollment.id,
+                reason: `${reason}; promotional follow-up sequence stopped (no meeting booked)`,
+            },
+            idempotency_key: `lead_${leadId}_handoff_stopped_${enrollment.id}`,
+        });
+        return { stopped: true, status: "stopped_handoff", enrollmentId: enrollment.id };
     },
 
     async handleMeetingBooked(leadId, orgId = 1) {
@@ -758,7 +709,7 @@ export const followUpEngine = {
         const enrollment = await FollowUpEnrollment.findById(enrollmentId, orgId);
         if (!enrollment) throw new Error("Enrollment not found");
 
-        const terminalStates = new Set(["stopped_meeting_booked", "stopped_unsubscribed", "stopped_do_not_contact", "completed"]);
+        const terminalStates = new Set(["stopped_meeting_booked", "stopped_handoff", "stopped_unsubscribed", "stopped_do_not_contact", "completed"]);
         if (terminalStates.has(enrollment.status)) {
             throw new Error(`Cannot resume sequence in terminal compliance state: ${enrollment.status}`);
         }
@@ -770,7 +721,7 @@ export const followUpEngine = {
             throw new Error("Cannot resume: lead is marked Do Not Contact");
         }
 
-        if (lead.status === "MEETING_BOOKED") {
+        if (lead.status === "MEETING_BOOKED" || lead.handoff_status === "MEETING_BOOKED") {
             throw new Error("Cannot resume: sales meeting already booked for this lead");
         }
 
@@ -1003,7 +954,7 @@ export const followUpEngine = {
             const enrollments = await query(
                 `SELECT id, lead_id FROM follow_up_enrollments
                  WHERE organization_id = ? AND sequence_id = ?
-                   AND status NOT IN ('completed', 'stopped_meeting_booked', 'stopped_unsubscribed', 'stopped_do_not_contact', 'stopped')`,
+                   AND status NOT IN ('completed', 'stopped_meeting_booked', 'stopped_handoff', 'stopped_unsubscribed', 'stopped_do_not_contact', 'stopped')`,
                 [targetOrgId, seqId]
             );
             for (const row of enrollments) {
@@ -1032,7 +983,7 @@ export const followUpEngine = {
         const allActive = await query(
             `SELECT id, lead_id FROM follow_up_enrollments
              WHERE organization_id = ?
-               AND status NOT IN ('completed', 'stopped_meeting_booked', 'stopped_unsubscribed', 'stopped_do_not_contact', 'stopped')`,
+               AND status NOT IN ('completed', 'stopped_meeting_booked', 'stopped_handoff', 'stopped_unsubscribed', 'stopped_do_not_contact', 'stopped')`,
             [targetOrgId]
         );
         for (const row of allActive) {

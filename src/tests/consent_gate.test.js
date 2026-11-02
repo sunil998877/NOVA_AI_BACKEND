@@ -41,6 +41,14 @@ test("MANUAL and API intake grant channel consent when the channel is present an
         consentVoice: "no",
     });
     assert.equal(denied.voice_consent.status, CONSENT_STATUSES.DENIED);
+
+    const form = normalizeLead({
+        email: "ops@acme.example",
+        phone: "+15551230000",
+        source: "FORM",
+    });
+    assert.equal(form.email_consent.status, CONSENT_STATUSES.GRANTED);
+    assert.equal(form.voice_consent.status, CONSENT_STATUSES.GRANTED);
 });
 
 test("UNKNOWN email consent cannot dispatch autonomous email", () => {

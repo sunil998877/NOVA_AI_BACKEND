@@ -3,6 +3,8 @@ import { classifyProspectSpeech } from "../outcomeNormalizer.service.js";
 import { env } from "../../../config/env.js";
 import { tryPlaybookVoice } from "../salesPlaybook.service.js";
 import { resolvePublicBaseUrl } from "../../../utils/publicBaseUrl.js";
+import { isGroundedResearch } from "../companyResearch.service.js";
+import { formatSignalsForVoice } from "../../../modules/intelligence/services/signals.service.js";
 
 export class PlivoVoiceAdapter extends BaseChannelAdapter {
     constructor() {
@@ -189,6 +191,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
                     company_name: lead.company || research?.company || "",
                     company_summary: research?.summary || "",
                     industry: research?.industry || "",
+                    company_signals: research ? formatSignalsForVoice(research) : "",
                     opening_line: openingLine,
                     email: lead.email || "",
                     phone: to,
@@ -316,7 +319,7 @@ export class PlivoVoiceAdapter extends BaseChannelAdapter {
         const meta = lead?.metadata;
         if (!meta) return null;
         const parsed = typeof meta === "string" ? (() => { try { return JSON.parse(meta); } catch { return {}; } })() : meta;
-        return parsed.company_research || null;
+        return isGroundedResearch(parsed.company_research) ? parsed.company_research : null;
     }
 
     buildCallSpeech(lead, customMessage) {

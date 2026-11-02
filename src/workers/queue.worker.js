@@ -6,6 +6,7 @@ if (dns.setDefaultResultOrder) {
 }
 
 import { connectDb } from "../config/db.js";
+import { enforceJwtConfigOrExit } from "../config/jwtSecret.js";
 import { closeRedis, isRedisConfigured } from "../config/redis.js";
 import { closeQueues, createQueueWorker, QUEUE_NAMES } from "../services/queue/queue.registry.js";
 import { processLeadImportJob } from "../services/queue/processors/leadImport.processor.js";
@@ -22,14 +23,18 @@ export function startQueueWorkers() {
         console.log("[QueueWorker] REDIS_URL is not set; workers not started");
         return [];
     }
+    const skipped = new Set(String(process.env.ASE_SKIP_QUEUES || "").split(",").map((name) => name.trim()).filter(Boolean));
     const started = [
-        createQueueWorker(QUEUE_NAMES.LEAD_IMPORT, processLeadImportJob),
-        createQueueWorker(QUEUE_NAMES.COMPANY_RESEARCH, processCompanyResearchJob),
-        createQueueWorker(QUEUE_NAMES.EMAIL_PERSONALIZATION, processEmailPersonalizationJob),
-        createQueueWorker(QUEUE_NAMES.FOLLOW_UP, processFollowUpJob),
-        createQueueWorker(QUEUE_NAMES.ASE_ACTIONS, processAseActionJob),
-        createQueueWorker(QUEUE_NAMES.ASE_CADENCE, processCadenceStepJob),
-    ].filter(Boolean);
+        [QUEUE_NAMES.LEAD_IMPORT, processLeadImportJob],
+        [QUEUE_NAMES.COMPANY_RESEARCH, processCompanyResearchJob],
+        [QUEUE_NAMES.EMAIL_PERSONALIZATION, processEmailPersonalizationJob],
+        [QUEUE_NAMES.FOLLOW_UP, processFollowUpJob],
+        [QUEUE_NAMES.ASE_ACTIONS, processAseActionJob],
+        [QUEUE_NAMES.ASE_CADENCE, processCadenceStepJob],
+    ]
+        .filter(([name]) => !skipped.has(name))
+        .map(([name, processor]) => createQueueWorker(name, processor))
+        .filter(Boolean);
     console.log(`[QueueWorker] started ${started.length} workers`);
     return started;
 }
@@ -42,6 +47,7 @@ export async function stopQueueWorkers() {
 }
 
 async function runStandalone() {
+    enforceJwtConfigOrExit("QueueWorker");
     if (!isRedisConfigured()) {
         console.error("[QueueWorker] REDIS_URL is required for the worker process");
         process.exit(1);

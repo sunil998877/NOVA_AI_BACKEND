@@ -1,5 +1,5 @@
-﻿import jwt from "jsonwebtoken";
-import { env } from "../config/env.js";
+﻿import { env } from "../config/env.js";
+import { verifyAuthToken } from "../utils/jwt.js";
 import { User } from "../models/user.model.js";
 import { Collaboration } from "../models/collaboration.model.js";
 
@@ -25,7 +25,7 @@ export async function socketAuth(socket, next) {
 
         if (env.jwtSecret) {
             try {
-                const payload = jwt.verify(token, env.jwtSecret);
+                const payload = verifyAuthToken(token);
                 if (payload?.sub) {
                     const user = await User.findById(payload.sub);
                     if (user) {

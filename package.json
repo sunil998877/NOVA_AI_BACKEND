@@ -12,6 +12,7 @@
     "check": "node --check src/server.js",
     "start": "node src/server.js",
     "worker": "node src/workers/queue.worker.js",
+    "worker:intelligence": "node src/workers/intelligence.worker.js",
     "redis": "node -e \"require('child_process').spawnSync(require('path').join('tools','redis','redis-server.exe'),['--port','6379','--bind','127.0.0.1'],{stdio:'inherit'})\"",
     "train:ase": "node scripts/train_ase_model.js",
     "ml:train": "python ml_service/train_heads.py",

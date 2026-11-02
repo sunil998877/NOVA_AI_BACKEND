@@ -71,7 +71,7 @@ export function consentFromIntake(explicit, flag, source) {
     return buildConsentRecord({ status: CONSENT_STATUSES.UNKNOWN, source });
 }
 
-const IMPLICIT_GRANT_SOURCES = new Set(["MANUAL", "CSV", "CSV_IMPORT", "API", "CRM_HUBSPOT"]);
+const IMPLICIT_GRANT_SOURCES = new Set(["MANUAL", "CSV", "CSV_IMPORT", "API", "FORM", "CRM_HUBSPOT"]);
 
 export function applyImplicitChannelConsent(consent, { hasChannel = false, source = "", flag } = {}) {
     if (!hasChannel || !consent) return consent;

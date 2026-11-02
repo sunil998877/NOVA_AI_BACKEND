@@ -1,5 +1,5 @@
-import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
+import { verifyAuthToken } from "../utils/jwt.js";
 import { User } from "../models/user.model.js";
 import { toPublicUser } from "../utils/user.js";
 import { verifyCampaignSendToken } from "../utils/campaign-send-token.js";
@@ -60,7 +60,7 @@ export const authenticate = async (req, res, next) => {
         }
 
         if (!env.jwtSecret) {
-            return res.status(500).json({ error: "JWT_SECRET is not configured" });
+            return res.status(503).json({ error: "Authentication is not configured" });
         }
 
         const campaignSend = verifyCampaignSendToken(token);
@@ -81,7 +81,7 @@ export const authenticate = async (req, res, next) => {
             return next();
         }
 
-        const payload = jwt.verify(token, env.jwtSecret);
+        const payload = verifyAuthToken(token);
 
         let user = getCachedUser(payload.sub);
         if (!user) {

@@ -1,5 +1,8 @@
 import dotenv from "dotenv";
+import { resolveJwtConfig } from "./jwtSecret.js";
 dotenv.config({ quiet: true });
+
+const jwtConfig = resolveJwtConfig(process.env);
 
 const parseOrigins = (value) => {
     const defaultOrigins = [
@@ -13,6 +16,15 @@ const parseOrigins = (value) => {
         .map((origin) => origin.trim().replace(/\/$/, ""))
         .filter(Boolean);
     return [...new Set([...defaultOrigins, ...parsed])];
+};
+
+const parseTrustProxy = (value) => {
+    const raw = String(value ?? "").trim().toLowerCase();
+    if (!raw) return 1;
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    return String(value).trim();
 };
 
 const parseList = (value) =>
@@ -221,9 +233,14 @@ export const env = {
     port: Number(process.env.PORT || 3001),
     nodeEnv: process.env.NODE_ENV || "development",
     mysql: parseMysqlConfig(),
-    jwtSecret: process.env.JWT_SECRET || "NOVA_AI_JWT_SECRET_9f7K2mP4xL8vQ6sR3tY5nW1aZ0cD8eF7",
+    jwtSecret: jwtConfig.secret,
+    jwtPreviousSecrets: jwtConfig.previousSecrets,
+    jwtConfigErrors: jwtConfig.errors,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
-    allowedOrigins: parseOrigins(process.env.ALLOWED_ORIGINS),
+    allowedOrigins: parseOrigins(
+        [process.env.ALLOWED_ORIGINS, String(process.env.FRONTEND_URL || "").replace(/\|\|/g, ",")].join(",")
+    ),
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     googleClientId: googleClientIds[0] || "",
     googleClientIds,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
@@ -298,11 +315,24 @@ export const env = {
             && process.env.NODE_ENV !== "test"
             && typeof process.env.NODE_TEST_CONTEXT === "undefined"
         ),
+    autoEnrollCadence: process.env.ASE_AUTO_ENROLL_CADENCE !== "false" && process.env.ASE_AUTO_ENROLL_CADENCE !== "0",
+    inboundEmailWebhookSecret: String(process.env.INBOUND_EMAIL_WEBHOOK_SECRET || "").trim(),
+    replyModel: process.env.ASE_REPLY_MODEL || "gpt-4o-mini",
+    calendar: {
+        provider: String(process.env.CALENDAR_PROVIDER || "none").trim().toLowerCase(),
+        defaultCalendarId: String(process.env.GOOGLE_CALENDAR_DEFAULT_ID || "").trim(),
+        clientId: String(process.env.GOOGLE_CALENDAR_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim(),
+        clientSecret: String(process.env.GOOGLE_CALENDAR_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || "").trim(),
+        refreshToken: String(process.env.GOOGLE_CALENDAR_REFRESH_TOKEN || "").trim(),
+        serviceAccountKey: String(process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_KEY || "").trim(),
+        impersonateRep: process.env.GOOGLE_CALENDAR_IMPERSONATE_REP === "true",
+        sendUpdates: String(process.env.GOOGLE_CALENDAR_SEND_UPDATES || "all").trim(),
+        defaultDurationMinutes: Number(process.env.MEETING_DEFAULT_DURATION_MINUTES || 30),
+    },
 };
 
 if (env.nodeEnv === "production") {
     const missing = [];
-    if (!env.jwtSecret || env.jwtSecret.length < 32) missing.push("JWT_SECRET (minimum 32 characters)");
     if (!env.mysql.password) missing.push("MYSQL_PASSWORD");
     if (!process.env.ALLOWED_ORIGINS) missing.push("ALLOWED_ORIGINS");
     if (!process.env.LEADS_API_KEY || env.leadsApiKey === "ase-lead-key-nova-2026") missing.push("LEADS_API_KEY");
