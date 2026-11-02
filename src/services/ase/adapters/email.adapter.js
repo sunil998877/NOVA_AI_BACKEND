@@ -7,6 +7,7 @@ import { Lead } from "../../../models/lead.model.js";
 import { LeadEvent } from "../../../models/lead-event.model.js";
 import { resolvePublicBaseUrl } from "../../../utils/publicBaseUrl.js";
 import { sanitizeOutreachEmail } from "../../../utils/outreachEmail.js";
+import { isSendableDraft, recordSentOutreach, toStoredOutreachEmail } from "../emailEngine/salesEmailEngine.service.js";
 
 function attachOpenPixel(html, leadId, token, baseUrl) {
     const src = `${baseUrl}/api/tracking/open/ase/${leadId}?t=${token}`;
@@ -38,32 +39,64 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
         const senderName = payload.senderName || env.novaSenderName || "NOVA AI";
         const fromAddress = `"${senderName}" <${senderEmail}>`;
 
-        const currentMeta = { ...(typeof lead.metadata === "object" && lead.metadata ? lead.metadata : {}) };
-        const storedEmail = currentMeta.outreach_email
-            ? sanitizeOutreachEmail(currentMeta.outreach_email, senderName)
+        let currentMeta = { ...(typeof lead.metadata === "object" && lead.metadata ? lead.metadata : {}) };
+        const unsentStored = currentMeta.outreach_email && !currentMeta.outreach_email.sent_at ? currentMeta.outreach_email : null;
+        const keepEngineText = Boolean(unsentStored?.generation_version);
+        const storedEmail = unsentStored
+            ? (keepEngineText ? unsentStored : sanitizeOutreachEmail(unsentStored, senderName))
             : null;
 
         let subject = payload.subject || storedEmail?.subject;
         let bodyText = payload.text || storedEmail?.text;
         let bodyHtml = payload.html || storedEmail?.html;
         let companyResearch = payload.research || currentMeta.company_research || null;
+        let outgoing = storedEmail;
 
         if (!subject || (!bodyHtml && !bodyText)) {
-            const drafted = await draftCompanyPersonalizedEmail(lead, { senderName, senderEmail });
+            const drafted = await draftCompanyPersonalizedEmail(lead, { senderName });
+            if (drafted.blocked) {
+                return {
+                    channel: "EMAIL",
+                    status: "FAILED",
+                    error: `Email generation blocked: ${drafted.block_message || drafted.block_reason}`,
+                    rawResponse: null,
+                };
+            }
+            outgoing = drafted.generation_version ? toStoredOutreachEmail(drafted) : null;
             subject = subject || drafted.subject;
             bodyText = bodyText || drafted.text;
             bodyHtml = bodyHtml || drafted.html;
             companyResearch = drafted.research || companyResearch;
+            if (outgoing) {
+                currentMeta.outreach_email = outgoing;
+                currentMeta.outreach_status = "ready";
+            }
         }
 
-        if (subject && (bodyText || bodyHtml)) {
+        if (!payload.subject && outgoing?.generation_version) {
+            const verdict = isSendableDraft(outgoing, { approved: Boolean(payload.approved) });
+            if (!verdict.sendable) {
+                if (lead.id && outgoing !== storedEmail) {
+                    await Lead.updateById(lead.id, { metadata: { ...currentMeta, company_research: companyResearch || currentMeta.company_research || null } }, lead.organization_id || 1).catch(() => {});
+                }
+                return {
+                    channel: "EMAIL",
+                    status: "FAILED",
+                    error: `Email draft requires review before sending (${verdict.reason})`,
+                    reviewRequired: Boolean(verdict.reviewRequired),
+                    rawResponse: null,
+                };
+            }
+        }
+
+        if (subject && (bodyText || bodyHtml) && !(keepEngineText && outgoing === storedEmail && !payload.text)) {
             const cleaned = sanitizeOutreachEmail({ subject, text: bodyText, html: bodyHtml }, senderName);
             subject = cleaned.subject;
             bodyText = cleaned.text;
             bodyHtml = cleaned.html;
         }
 
-        if (lead.id && subject && (bodyText || bodyHtml) && !storedEmail?.subject) {
+        if (lead.id && subject && (bodyText || bodyHtml) && !currentMeta.outreach_email?.subject) {
             currentMeta.outreach_email = {
                 subject,
                 text: bodyText,
@@ -80,29 +113,33 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
 
         const openToken = currentMeta.outreach_open_token || crypto.randomBytes(24).toString("hex");
         const trackingBase = await resolvePublicBaseUrl();
+        const sentEmail = { ...(outgoing || {}), subject, text: bodyText, html: bodyHtml };
         if (lead.id) {
             bodyHtml = attachOpenPixel(bodyHtml, lead.id, openToken, trackingBase);
+            currentMeta = {
+                ...currentMeta,
+                company_research: companyResearch || currentMeta.company_research || null,
+                outreach_email: currentMeta.outreach_email || {
+                    subject,
+                    text: bodyText,
+                    html: bodyHtml,
+                    written_at: new Date().toISOString(),
+                },
+                outreach_status: "ready",
+                outreach_open_token: openToken,
+            };
             try {
-                await Lead.updateById(
-                    lead.id,
-                    {
-                        metadata: {
-                            ...currentMeta,
-                            company_research: companyResearch || currentMeta.company_research || null,
-                            outreach_email: currentMeta.outreach_email || {
-                                subject,
-                                text: bodyText,
-                                html: bodyHtml,
-                                written_at: new Date().toISOString(),
-                            },
-                            outreach_status: "ready",
-                            outreach_open_token: openToken,
-                        },
-                    },
-                    lead.organization_id || 1
-                );
+                await Lead.updateById(lead.id, { metadata: currentMeta }, lead.organization_id || 1);
             } catch (_) {}
         }
+        const markSent = async () => {
+            if (!lead.id || payload.subject) return;
+            try {
+                await Lead.updateById(lead.id, { metadata: recordSentOutreach(currentMeta, sentEmail) }, lead.organization_id || 1);
+            } catch (err) {
+                console.warn(`[EmailEngine] could not record sent outreach for lead ${lead.id}: ${err.message}`);
+            }
+        };
 
         if (lead.id && companyResearch && !currentMeta.company_research) {
             try {
@@ -127,6 +164,7 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
         }
 
         if (reservedDomains.includes(domain)) {
+            await markSent();
             const simulatedId = `sim_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             return {
                 channel: "EMAIL",
@@ -165,6 +203,7 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
             });
 
             if (result.status === "SUCCEEDED") {
+                await markSent();
                 return {
                     channel: "EMAIL",
                     status: "SUCCEEDED",

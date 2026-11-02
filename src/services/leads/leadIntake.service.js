@@ -315,7 +315,11 @@ async function ingestLockedLead(data, {
     const nextAction = isSuppressedBool || !emailAllowed ? null : "EMAIL";
     const nextActionTime = nextAction ? new Date() : null;
     if (!isSuppressedBool) {
-        data.metadata = { ...(data.metadata || {}), company_research_status: "pending" };
+        data.metadata = {
+            ...(data.metadata || {}),
+            company_research_status: "pending",
+            outreach_status: "writing",
+        };
     }
 
     let lead;

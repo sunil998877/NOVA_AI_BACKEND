@@ -9,10 +9,11 @@ import { MAX_BATCH } from "../../services/leads/leadIntake.service.js";
 import { aseScheduler } from "../../services/ase/scheduler.service.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { query } from "../../config/db.js";
-import { draftCompanyPersonalizedEmail } from "../../services/ase/leadEmailDrafter.service.js";
+import { draftAndStoreLeadEmail } from "../../services/ase/leadEmailDrafter.service.js";
+import { rescoreEditedEmail, toStoredOutreachEmail } from "../../services/ase/emailEngine/salesEmailEngine.service.js";
 import { isUsableResearchProfile } from "../../services/ase/companyResearch.service.js";
 import { enqueueLeadCompanyResearch } from "../../services/leads/companyResearchQueue.js";
-import { getLeadApproval } from "../../services/ase/approvalQueue.service.js";
+import { getLeadApproval, prepareLeadApproval } from "../../services/ase/approvalQueue.service.js";
 import { executionFlagsForMode, getOperatingMode } from "../../services/ase/operatingMode.service.js";
 import { OPERATING_MODES } from "../../services/ase/operatingMode.constants.js";
 import { haltOutreachForLead } from "../../services/ase/outreachHalt.service.js";
@@ -394,35 +395,97 @@ export const draftLeadEmail = asyncHandler(async (req, res) => {
     const lead = await Lead.findById(req.params.id, orgId);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
-    const drafted = await draftCompanyPersonalizedEmail(lead, req.body || {});
+    const { senderName } = req.body || {};
+    const { drafted, lead: updated, email } = await draftAndStoreLeadEmail(lead, {
+        userId: req.user.id || null,
+        senderName,
+    });
+    if (drafted.blocked) {
+        return res.status(409).json({
+            error: drafted.block_message || "Email generation is blocked for this lead",
+            data: { blocked: true, reason: drafted.block_reason, conversation_context: drafted.conversation_context },
+        });
+    }
+    return res.status(200).json({ data: { lead: updated, email } });
+});
+
+export const saveLeadEmailDraft = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    const lead = await Lead.findById(req.params.id, orgId);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+    const subject = String(req.body?.subject || "").trim();
+    const text = String(req.body?.text || "").trim();
+    if (!subject || !text) return res.status(400).json({ error: "Subject and body are required" });
+    if (subject.length > 200 || text.length > 8000) return res.status(400).json({ error: "Email is too long" });
+
     const existing = lead.metadata || {};
-    const metadata = {
-        ...existing,
-        company_research: existing.company_research || drafted.research,
-        outreach_status: "ready",
-        outreach_email: {
-            subject: drafted.subject,
-            text: drafted.text,
-            html: drafted.html,
-            written_at: new Date().toISOString(),
-        },
-    };
-
-    const updated = await Lead.updateById(lead.id, { metadata }, orgId);
-
+    const rescored = await rescoreEditedEmail(lead, { subject, text });
+    if (rescored.blocked) {
+        return res.status(409).json({ error: rescored.block_message, data: { blocked: true, reason: rescored.block_reason } });
+    }
+    const outreachEmail = toStoredOutreachEmail(rescored, {
+        previous: existing.outreach_email,
+        edited: true,
+        userId: req.user.id || null,
+    });
+    const updated = await Lead.updateById(lead.id, {
+        metadata: { ...existing, outreach_status: "ready", outreach_email: outreachEmail },
+    }, orgId);
     await LeadEvent.create({
         organization_id: orgId,
         lead_id: lead.id,
         user_id: req.user.id || null,
         channel: "EMAIL",
-        event_type: "EMAIL_DRAFTED",
-        status: "COMPLETED",
-        payload: {
-            subject: drafted.subject,
-            company: drafted.research?.company || lead.company,
-        },
-    });
+        event_type: "EMAIL_DRAFT_EDITED",
+        status: rescored.generation_status,
+        payload: { subject, quality_score: rescored.quality_score, hard_gate: rescored.hard_gate },
+    }).catch(() => {});
+    return res.status(200).json({ data: { lead: updated, email: outreachEmail } });
+});
 
-    return res.status(200).json({ data: { lead: updated, email: metadata.outreach_email } });
+export const approveAndSendLeadEmail = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user.organization_id || 1);
+    const userId = req.user.id || null;
+    const lead = await Lead.findById(req.params.id, orgId);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+    const existing = lead.metadata || {};
+    const email = existing.outreach_email;
+    if (!email?.subject || !email?.text) return res.status(400).json({ error: "No email draft to approve" });
+    if (email.sent_at) return res.status(409).json({ error: "This draft was already sent. Regenerate to write the next email." });
+
+    const recheck = await rescoreEditedEmail(lead, { subject: email.subject, text: email.text });
+    if (recheck.blocked) {
+        return res.status(409).json({ error: recheck.block_message, data: { blocked: true, reason: recheck.block_reason } });
+    }
+    if (!recheck.hard_gate.passed) {
+        return res.status(422).json({
+            error: "Draft failed factual or compliance validation. Edit or regenerate it before sending.",
+            data: { failures: recheck.hard_gate.failures },
+        });
+    }
+
+    await Lead.updateById(lead.id, {
+        metadata: {
+            ...existing,
+            outreach_email: { ...email, approvalStatus: "approved", approved_by: userId, approved_at: new Date().toISOString() },
+        },
+    }, orgId);
+
+    try {
+        const prepared = await prepareLeadApproval(orgId, lead.id, userId, { actionType: "EMAIL" });
+        const result = await aseScheduler.processLeadAction(prepared.lead, { approved: true, force: true });
+        const fresh = await Lead.findById(lead.id, orgId);
+        if (!result?.executed) {
+            return res.status(400).json({
+                error: result?.reason || "Approved email did not send",
+                data: { lead: fresh, executed: false, approval: prepared.approval },
+            });
+        }
+        return res.status(200).json({ data: { lead: fresh, executed: true, approval: prepared.approval } });
+    } catch (err) {
+        return res.status(err.status || 500).json({ error: err.message || "Could not send email" });
+    }
 });
 

@@ -1,4 +1,4 @@
-import { isUsableResearchProfile, researchCompany } from "../ase/companyResearch.service.js";
+import { isGroundedResearch, isUsableResearchProfile, researchCompany } from "../ase/companyResearch.service.js";
 import { storeOutreachDraft } from "../ase/leadEmailDrafter.service.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
@@ -32,7 +32,9 @@ export async function researchLeadCompany(lead, options = {}) {
     if (!fresh || fresh.do_not_contact) return null;
 
     const existing = readMetadata(fresh);
-    if (!options.force && isUsableResearchProfile(existing.company_research)) {
+    const researchedAt = existing.company_research?.researchedAt || existing.company_research_failed_at;
+    const justAttempted = researchedAt && Date.now() - new Date(researchedAt).getTime() < 2 * 60 * 1000;
+    if (!options.force && isGroundedResearch(existing.company_research)) {
         if (!options.skipDraft && !existing.outreach_email?.subject) {
             await storeOutreachDraft(fresh, existing.company_research);
         } else if (existing.company_research_status === "pending") {
@@ -43,6 +45,9 @@ export async function researchLeadCompany(lead, options = {}) {
             );
         }
         await kickScheduler();
+        return existing.company_research;
+    }
+    if (!options.force && justAttempted && existing.company_research) {
         return existing.company_research;
     }
 

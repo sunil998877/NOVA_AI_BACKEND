@@ -6,6 +6,7 @@ import { getActivePlaybook, playbookFactsForAi } from "../salesPlaybook.service.
 import { isGroundedResearch, isUsableResearchProfile, researchCompany } from "../companyResearch.service.js";
 import { STEP_PURPOSE } from "./cadence.constants.js";
 import { formatSignalsForPrompt } from "../../../modules/intelligence/services/signals.service.js";
+import { buildOfflineContext, scoreExternalDraft } from "../emailEngine/salesEmailEngine.service.js";
 
 const PURPOSE_BRIEF = {
     [STEP_PURPOSE.MISSED_CALL_EMAIL]: "We called and could not reach the prospect. Say plainly that we tried to call and could not connect. Never imply any conversation happened. Give one short reason the call was relevant, then ask for a convenient time.",
@@ -73,7 +74,16 @@ export function buildCadenceTemplate({ purpose, firstName, company, senderName, 
     return { subject, text: body, html: bodyToHtml(body) };
 }
 
-async function writeWithAi({ client, purpose, firstName, company, senderName, brandName, research, grounded, seller, previousBodies }) {
+function audienceLines(engineContext) {
+    if (!engineContext) return "";
+    const { role, industry } = engineContext;
+    return [
+        `Recipient role: ${role.title || "not on record (stay neutral, do not assume responsibilities)"}; likely priorities: ${role.focusAreas.join(", ")}`,
+        `Industry: ${industry.label}${industry.verified ? "" : " (unverified)"}; possible relevance, phrased conditionally ("If your team manages..."): ${industry.opportunity}`,
+    ].join("\n");
+}
+
+async function writeWithAi({ client, purpose, firstName, company, senderName, brandName, research, grounded, seller, previousBodies, engineContext }) {
     const facts = grounded
         ? `Verified prospect research (from ${research.sources.map((s) => s.url).slice(0, 3).join(", ")}):\nSummary: ${research.summary}\nIndustry: ${research.industry || ""}\nServices: ${research.coreServices || ""}\n${formatSignalsForPrompt(research)}`
         : "No verified prospect research is available. Do not describe the prospect's business at all.";
@@ -93,6 +103,7 @@ Recipient first name: ${firstName}
 Prospect company: ${company}
 Seller brand: ${brandName || senderName}
 Seller facts: ${JSON.stringify(seller || {})}
+${audienceLines(engineContext)}
 ${facts}
 Previous emails already sent (do not repeat):
 ${(previousBodies || []).map((b, i) => `#${i + 1}: ${String(b).slice(0, 400)}`).join("\n") || "none"}
@@ -132,16 +143,29 @@ export async function draftCadenceEmail(lead, { purpose, previousBodies = [], se
     const grounded = isGroundedResearch(research);
     const base = { purpose, firstName, company, senderName, brandName, research, grounded, seller };
     const check = (email) => validateEmailDraft({ ...email, research, noPriorConversation: true, previousBodies });
+    let engineContext = null;
+    try {
+        engineContext = buildOfflineContext({ lead, research, playbook, previousBodies, senderName });
+    } catch (err) {
+        console.warn("[Cadence] engine context unavailable:", err.message);
+    }
+    const score = (email) => {
+        try {
+            return engineContext ? scoreExternalDraft(engineContext, email) : null;
+        } catch {
+            return null;
+        }
+    };
 
     const client = grounded ? getOpenAiClient() : null;
     if (client) {
         try {
-            const ai = await writeWithAi({ ...base, client, previousBodies });
+            const ai = await writeWithAi({ ...base, client, previousBodies, engineContext });
             if (ai) {
                 const cleaned = sanitizeOutreachEmail(ai, senderName);
                 const quality = check(cleaned);
                 if (quality.eligibleToSend) {
-                    return finalize(cleaned, { quality, research, grounded, generator: "openai" });
+                    return finalize(cleaned, { quality, research, grounded, generator: "openai", engineScore: score(cleaned) });
                 }
             }
         } catch (err) {
@@ -150,10 +174,10 @@ export async function draftCadenceEmail(lead, { purpose, previousBodies = [], se
     }
 
     const template = sanitizeOutreachEmail(buildCadenceTemplate(base), senderName);
-    return finalize(template, { quality: check(template), research, grounded, generator: "template" });
+    return finalize(template, { quality: check(template), research, grounded, generator: "template", engineScore: score(template) });
 }
 
-function finalize(email, { quality, research, grounded, generator }) {
+function finalize(email, { quality, research, grounded, generator, engineScore = null }) {
     const reviewReasons = [];
     if (!grounded) reviewReasons.push("WEAK_RESEARCH");
     if (!quality.eligibleToSend) reviewReasons.push(...quality.issues);
@@ -164,6 +188,10 @@ function finalize(email, { quality, research, grounded, generator }) {
         generator,
         grounding: grounded ? "grounded" : "conservative",
         qualityChecks: quality,
+        quality_score: engineScore?.quality_score ?? null,
+        quality_band: engineScore?.quality_band ?? null,
+        quality_breakdown: engineScore?.quality_breakdown ?? null,
+        validation_warnings: engineScore?.validation_warnings ?? [],
         needsReview: reviewReasons.length > 0,
         reviewReasons,
         blocked: !quality.eligibleToSend,

@@ -3,7 +3,7 @@ import { env } from "../../../config/env.js";
 import { getOpenAiClient } from "../../../controllers/OpenAI/client.js";
 import { getCachedResearch, setCachedResearch } from "../../../services/queue/cache.service.js";
 import { fetchCompanySite, isBlockedAddress } from "../providers/website.provider.js";
-import { findReferencePage } from "../providers/wikipedia.provider.js";
+import { findOfficialWebsite, findReferencePage } from "../providers/wikipedia.provider.js";
 import { mergeTechnologies } from "../providers/techDetection.provider.js";
 import { fetchHiringSignals } from "../providers/hiring.provider.js";
 import { searchCompanyEvents } from "../providers/webSearch.provider.js";
@@ -46,6 +46,13 @@ function cleanDomain(domain) {
     return clean;
 }
 
+export function resolveResearchDomain({ domain, website, email, company } = {}) {
+    return cleanDomain(domain)
+        || cleanDomain(website)
+        || cleanDomain(String(email || "").split("@")[1])
+        || cleanDomain(String(company || "").trim().toLowerCase().replace(/\s+/g, ""));
+}
+
 export function isUsableResearchProfile(research) {
     if (!research || typeof research !== "object") return false;
     const domain = cleanDomain(research.domain);
@@ -53,8 +60,9 @@ export function isUsableResearchProfile(research) {
     if (/example domain/i.test(String(research.summary || ""))) return false;
     const summary = String(research.summary || "").trim();
     if (!summary) return false;
-    if (research.qualityStatus === "INSUFFICIENT_EVIDENCE") return false;
-    if (research.source === "lead_record" || research.source === "openai_key_missing") return false;
+    if (/no verified public source was found/i.test(summary)) return false;
+    if (research.qualityStatus === "INSUFFICIENT_EVIDENCE" || research.qualityStatus === "NEEDS_REVIEW") return false;
+    if (research.source === "lead_record" || research.source === "openai_key_missing" || research.source === "openai_company_lookup") return false;
     return true;
 }
 
@@ -154,8 +162,12 @@ function buildProfile(context, extras = {}) {
         qualityReasons: quality.qualityReasons,
         profileVersion: 2,
         researchedAt: new Date().toISOString(),
-        resolutionMethod: context.effectiveDomain ? "email_or_website_domain" : "company_name_only",
-        resolutionConfidence: context.effectiveDomain ? 0.8 : 0.2,
+        resolutionMethod: context.resolutionMethod && context.effectiveDomain
+            ? context.resolutionMethod
+            : (context.effectiveDomain ? "email_or_website_domain" : "company_name_only"),
+        resolutionConfidence: context.effectiveDomain
+            ? (String(context.resolutionMethod || "").startsWith("discovered") ? 0.7 : 0.8)
+            : 0.2,
     };
 }
 
@@ -193,10 +205,12 @@ export async function loadCompanyContext(companyName, { domain = null, leadInfo 
     }
 
     const rawCompany = String(companyName || "").trim();
-    const effectiveDomain = cleanDomain(domain)
-        || cleanDomain(leadInfo?.website)
-        || cleanDomain(leadInfo?.company_website)
-        || cleanDomain(leadInfo?.email?.split("@")[1]);
+    const effectiveDomain = resolveResearchDomain({
+        domain,
+        website: leadInfo?.website || leadInfo?.company_website,
+        email: leadInfo?.email,
+        company: rawCompany,
+    });
     const effectiveCompany = rawCompany || (effectiveDomain ? effectiveDomain.split(".")[0] : "Unknown organization");
     let cachedResearch = peekCompanyResearch(effectiveDomain, effectiveCompany, orgId);
     if (!cachedResearch && effectiveDomain && orgId) {
@@ -270,12 +284,16 @@ Return JSON:
         summary = `${context.effectiveCompany} appears to operate in ${industry || "its market"}. ${coreServices || "Public offerings were inferred from the company name."}`;
     }
     if (!summary) return null;
-    const where = context.effectiveDomain ? ` for ${context.effectiveDomain}` : "";
     return buildProfile(context, {
-        summary: `No verified public source was found${where}. ${context.effectiveCompany} needs manual research before company-specific outreach.`,
+        summary: "",
         coreServices: "",
         industry: context.industryHint || "",
-        unverifiedHypothesis: { summary, industry, coreServices, knownCompany: Boolean(parsed.knownCompany) },
+        unverifiedHypothesis: {
+            summary,
+            industry,
+            coreServices,
+            knownCompany: Boolean(parsed.knownCompany),
+        },
         source: "openai_company_lookup",
         qualityStatus: "NEEDS_REVIEW",
         qualityReasons: [parsed.knownCompany ? "OPENAI_KNOWN_COMPANY" : "OPENAI_NAME_INFERENCE", "NO_SOURCE_EVIDENCE"],
@@ -318,9 +336,86 @@ async function summarizeSiteWithOpenAi(context) {
     };
 }
 
+const GENERIC_NAME_WORDS = new Set([
+    "inc", "incorporated", "llc", "ltd", "limited", "pvt", "private", "corp", "corporation", "co", "company",
+    "gmbh", "plc", "llp", "the", "and", "group", "technologies", "technology", "tech", "solutions", "software",
+    "services", "systems", "labs", "global", "india", "international", "enterprises", "industries",
+]);
+
+export function companyCoreTokens(company) {
+    const words = String(company || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const core = words.filter((word) => word.length >= 2 && !GENERIC_NAME_WORDS.has(word));
+    return core.length ? core : words.filter((word) => word.length >= 2);
+}
+
+// The fetched homepage must name the brand in its title, site name, top heading, or host.
+export function siteMatchesCompany(company, home, domain = "") {
+    const [brand] = companyCoreTokens(company);
+    if (!brand) return false;
+    const squash = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    let host = domain;
+    try {
+        host = new URL(home?.url || "").hostname || domain;
+    } catch {}
+    const haystack = squash([home?.title, home?.siteName, home?.headings?.[0], host].join(" "));
+    return haystack.includes(brand);
+}
+
+async function suggestDomainsWithOpenAi(context) {
+    const client = getResearchOpenAiClient();
+    if (!client) return [];
+    const response = await client.chat.completions.create({
+        model: process.env.ASE_RESEARCH_MODEL || "gpt-4o-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+            {
+                role: "system",
+                content: "Return the official website domain of the named company. Use bare domains only, like acme.com. If you are not sure, return an empty list. Output JSON {\"domains\": [\"...\"]} with at most 3 entries.",
+            },
+            {
+                role: "user",
+                content: `Company: ${context.effectiveCompany}\nIndustry hint: ${context.industryHint || "unknown"}`,
+            },
+        ],
+    });
+    const parsed = JSON.parse(response.choices[0]?.message?.content || "{}");
+    return (Array.isArray(parsed.domains) ? parsed.domains : []).map(String).slice(0, 3);
+}
+
+// Used when the lead's email is a personal mailbox: find the company's site from its name,
+// and accept a candidate only after fetching it and seeing the brand on the page.
+export async function discoverCompanyWebsite(context) {
+    const company = context.effectiveCompany;
+    if (!company || company === "Unknown organization" || process.env.ASE_RESEARCH_FETCH_SITE === "false") return null;
+    const candidates = [];
+    const add = (domain, method) => {
+        const clean = cleanDomain(domain);
+        if (clean && !candidates.some((c) => c.domain === clean)) candidates.push({ domain: clean, method });
+    };
+    const reference = await findOfficialWebsite(company).catch(() => null);
+    if (reference?.domain) add(reference.domain, "discovered_wikidata_official_site");
+    const suggested = await suggestDomainsWithOpenAi(context).catch(() => []);
+    for (const domain of suggested) add(domain, "discovered_name_lookup_verified_site");
+    const slug = companyCoreTokens(company).join("");
+    if (slug.length >= 3) add(`${slug}.com`, "discovered_name_slug_verified_site");
+
+    for (const candidate of candidates.slice(0, 4)) {
+        const pages = await fetchCompanySite(candidate.domain, {
+            acceptHome: (home) => siteMatchesCompany(company, home, candidate.domain),
+        }).catch(() => []);
+        if (pages.length) return { ...candidate, pages };
+        // Wikidata's official-site claim is itself a source, so keep it even if the site blocks our fetcher.
+        if (candidate.method === "discovered_wikidata_official_site") return { ...candidate, pages: [], siteUnreachable: true };
+    }
+    return null;
+}
+
 async function researchFromWebsite(context) {
-    if (!context.effectiveDomain || process.env.ASE_RESEARCH_FETCH_SITE === "false") return null;
-    const sitePages = await fetchCompanySite(context.effectiveDomain).catch(() => []);
+    if (!context.effectiveDomain || context.siteUnreachable || process.env.ASE_RESEARCH_FETCH_SITE === "false") return null;
+    const sitePages = context.sitePages?.length
+        ? context.sitePages
+        : await fetchCompanySite(context.effectiveDomain).catch(() => []);
     if (!sitePages.length) return null;
     const siteContext = { ...context, sitePages };
     const client = getResearchOpenAiClient();
@@ -407,6 +502,18 @@ async function researchGrounded(context) {
 }
 
 async function researchUncached(context) {
+    if (!context.effectiveDomain) {
+        const found = await discoverCompanyWebsite(context).catch((error) => {
+            console.warn("[CompanyResearch] Website discovery failed:", error.message);
+            return null;
+        });
+        if (found) {
+            context.effectiveDomain = found.domain;
+            context.sitePages = found.pages;
+            context.resolutionMethod = found.method;
+            context.siteUnreachable = Boolean(found.siteUnreachable);
+        }
+    }
     const grounded = await researchGrounded(context);
     if (grounded) return enrichWithWebSearch(grounded, context);
     try {
@@ -444,9 +551,13 @@ export async function researchCompany(companyName, options = {}) {
     const key = cacheKey(context.effectiveDomain, context.effectiveCompany, context.orgId);
     if (researchInflight.has(key)) return researchInflight.get(key);
 
+    const initialDomain = context.effectiveDomain;
     const job = researchUncached(context)
         .then((research) => {
             rememberCompanyResearch(context.effectiveDomain, context.effectiveCompany, research, context.orgId);
+            if (!initialDomain && context.effectiveDomain) {
+                rememberCompanyResearch(null, context.effectiveCompany, research, context.orgId);
+            }
             return research;
         })
         .finally(() => researchInflight.delete(key));

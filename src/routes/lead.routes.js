@@ -4,7 +4,7 @@ import { authenticate, requireAseAdmin, requireAseRole } from "../middleware/aut
 import { authenticateLeadApi } from "../middleware/leadApiKey.middleware.js";
 import { ingestLeadsFromApi } from "../controllers/Lead/api-intake.controller.js";
 import { getImportJob, importCsv, listImportJobs, previewCsv } from "../controllers/Lead/csv-import.controller.js";
-import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail } from "../controllers/Lead/manage.controller.js";
+import { deleteLead, getLead, leadStats, listLeads, updateLead, getApiCaptureConfig, rotateApiCaptureKey, executeLeadAction, listTeamReps, draftLeadEmail, saveLeadEmailDraft, approveAndSendLeadEmail } from "../controllers/Lead/manage.controller.js";
 import { exportAseReportsCsv, getAseReports, getComplianceLog, listSegments } from "../controllers/Lead/reports.controller.js";
 import { getLeadDecision, getLeadConversionPrediction, getBrainStatus, updateBrainMode, getBrainEvaluation, getOperatingModeStatus, updateOperatingMode } from "../controllers/Lead/brain.controller.js";
 import { getLeadClickToCall, startLeadClickToCall } from "../controllers/Ase/clickToCall.controller.js";
@@ -60,6 +60,8 @@ router.get("/:id/call", authenticate, requireAseRole, getLeadClickToCall);
 router.get("/:id", authenticate, requireAseRole, getLead);
 router.post("/:id/execute", authenticate, requireAseRole, executeLeadAction);
 router.post("/:id/draft-email", authenticate, requireAseRole, draftLeadEmail);
+router.patch("/:id/draft-email", authenticate, requireAseRole, saveLeadEmailDraft);
+router.post("/:id/draft-email/approve", authenticate, requireAseRole, approveAndSendLeadEmail);
 router.patch("/:id", authenticate, requireAseRole, updateLead);
 router.delete("/:id", authenticate, requireAseAdmin, deleteLead);
 

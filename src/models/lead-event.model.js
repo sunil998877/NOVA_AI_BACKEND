@@ -101,6 +101,17 @@ export const LeadEvent = {
         return counts;
     },
 
+    async listRecentPayloadsByType(orgId, eventType, { excludeLeadId = null, limit = 60 } = {}) {
+        const rows = await query(
+            `SELECT lead_id, payload, created_at FROM ${table}
+             WHERE organization_id = ? AND event_type = ? AND lead_id <> ?
+             ORDER BY id DESC
+             LIMIT ?`,
+            [Number(orgId), String(eventType), Number(excludeLeadId || 0), Math.min(Number(limit) || 60, 200)]
+        );
+        return rows.map((row) => ({ leadId: row.lead_id, payload: parseJson(row.payload), createdAt: row.created_at }));
+    },
+
     async listRecent(orgId, limit = 50) {
         const rows = await query(
             `SELECT ${columns} FROM ${table}

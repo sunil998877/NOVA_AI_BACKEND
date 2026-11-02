@@ -43,6 +43,27 @@ function officialSitesOf(entity) {
         .filter((value) => typeof value === "string");
 }
 
+const normName = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Official website (Wikidata P856) of the entity whose label or alias is exactly the company name.
+export async function findOfficialWebsite(companyName) {
+    const name = String(companyName || "").trim();
+    if (name.length < 2) return null;
+    const search = await getJson(`${WIKIDATA_API}?action=wbsearchentities&format=json&language=en&type=item&limit=5&search=${encodeURIComponent(name)}`);
+    const ids = (search?.search || []).map((item) => item.id).filter(Boolean);
+    if (!ids.length) return null;
+    const entities = await getJson(`${WIKIDATA_API}?action=wbgetentities&format=json&props=claims|labels|aliases&languages=en&ids=${ids.join("|")}`);
+    const target = normName(name);
+    for (const id of ids) {
+        const entity = entities?.entities?.[id];
+        const names = [entity?.labels?.en?.value, ...(entity?.aliases?.en || []).map((alias) => alias?.value)];
+        if (!names.some((label) => normName(label) === target)) continue;
+        const host = officialSitesOf(entity).map(hostOf).find(Boolean);
+        if (host) return { domain: host, wikidataId: id };
+    }
+    return null;
+}
+
 export async function findReferencePage(companyName, domain) {
     const name = String(companyName || "").trim();
     if (!name || !domain) return null;

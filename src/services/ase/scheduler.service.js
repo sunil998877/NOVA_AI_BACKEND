@@ -24,6 +24,7 @@ import { env } from "../../config/env.js";
 import { recoverDueSteps, enrollLead, executeStep } from "./cadence/cadence.service.js";
 import { withCycleLock } from "../queue/cache.service.js";
 import { isConsentGranted } from "./consent.service.js";
+import { enqueuePendingApproval, nextHoldUntil } from "./approvalQueue.service.js";
 
 const SCHEDULER_LOCK_TTL_MS = 2 * 60 * 1000;
 
@@ -276,6 +277,7 @@ class AseScheduler {
             force,
             approved: Boolean(options.approved),
             manual: Boolean(options.manual),
+            botDial: String(action || "").toUpperCase() === "CALL" && !force && !options.approved && !options.manual,
         });
         if (!capacity.allowed) {
             await applyCapacityShift(workingLead, capacity);
@@ -522,7 +524,23 @@ class AseScheduler {
                     execution_id: claim.executionId,
                 });
 
-                result = await emailAdapter.execute(workingLead, "SEND");
+                result = await emailAdapter.execute(workingLead, "SEND", { approved: Boolean(options.approved) });
+
+                if (result.reviewRequired) {
+                    await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
+                    const queued = await enqueuePendingApproval({
+                        organizationId: orgId,
+                        leadId: workingLead.id,
+                        action: "EMAIL",
+                        payload: { source: "email_quality_review", reason: result.error },
+                    }).catch(() => null);
+                    await Lead.updateById(
+                        workingLead.id,
+                        { next_action: "EMAIL", next_action_time: nextHoldUntil() },
+                        orgId
+                    );
+                    return { executed: false, reason: result.error, queued: true, approvalId: queued?.approval?.id || null };
+                }
 
                 if (result.status !== "SUCCEEDED") {
                     await AseExecution.complete(claim.executionId, "FAILED", { error: result.error });
