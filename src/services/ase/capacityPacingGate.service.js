@@ -106,6 +106,7 @@ export async function applyCapacityGate(lead, action, options = {}) {
         action,
         hasEmail: Boolean(lead?.email),
         autonomous,
+        botDial: Boolean(options.botDial),
     });
     const reserve = options.reserve !== false;
     if (reserve && verdict.allowed && String(action || "").toUpperCase() === "CALL" && autonomous) {

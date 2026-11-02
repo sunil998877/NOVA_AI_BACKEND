@@ -490,7 +490,7 @@ async function holdEnrollment(orgId, enrollment, status, stage, reason) {
 }
 
 async function gateDispatch(ctx, action) {
-    const { orgId, step, enrollment, lead } = ctx;
+    const { orgId, step, enrollment, lead, settings, timezone } = ctx;
     const userTriggered = step.decided_by === DECIDED_BY.USER || Boolean(step.approved_by);
     const mode = await getOperatingMode(orgId);
     if (mode === OPERATING_MODES.HUMAN_ESCALATION && !userTriggered) {
@@ -509,9 +509,15 @@ async function gateDispatch(ctx, action) {
         });
         return { allowed: false, reason: "AI_RECOMMENDED" };
     }
-    const capacity = await applyCapacityGate(lead, action, { manual: userTriggered });
+    const capacity = await applyCapacityGate(lead, action, {
+        manual: userTriggered,
+        botDial: !userTriggered && action === CADENCE_ACTIONS.CALL,
+    });
     if (!capacity.allowed) {
-        await releaseStep(orgId, step, new Date(Date.now() + CAPACITY_RETRY_MS), `Capacity: ${capacity.reason}`);
+        const retryAt = action === CADENCE_ACTIONS.CALL
+            ? alignToWindow(new Date(Date.now() + CAPACITY_RETRY_MS), settings?.callingWindow, timezone)
+            : new Date(Date.now() + CAPACITY_RETRY_MS);
+        await releaseStep(orgId, step, retryAt, `Capacity: ${capacity.reason}`);
         return { allowed: false, reason: capacity.reason };
     }
     const compliance = await validateDispatchEligibility(lead, action, { cadence: true, bypassCooldown: true, isEngagementTrigger: true });

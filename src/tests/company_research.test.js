@@ -2,8 +2,9 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { extractPageFacts, fetchHtml, isBlockedAddress } from "../services/ase/companyWebsite.service.js";
-import { cleanDomain, heuristicResearch, isUsableResearchProfile } from "../services/ase/companyResearch.service.js";
+import { cleanDomain, heuristicResearch, isUsableResearchProfile, resolveResearchDomain } from "../services/ase/companyResearch.service.js";
 import { isGroundedResearch, stripSignoff } from "../services/ase/cadence/cadenceEmailDrafter.js";
+import { companyCoreTokens, siteMatchesCompany } from "../modules/intelligence/services/research.service.js";
 
 const HOME = `<!doctype html><html><head>
 <title>Acme Cold Chain &amp; Logistics</title>
@@ -57,6 +58,16 @@ describe("company website extraction", () => {
         assert.equal(cleanDomain("example.com"), null);
         assert.equal(cleanDomain("gmail.com"), null);
         assert.equal(cleanDomain("https://Acme.in/about"), "acme.in");
+        assert.equal(resolveResearchDomain({ company: "Evoke.Ai" }), "evoke.ai");
+        assert.equal(resolveResearchDomain({ email: "ops@gmail.com", company: "Evoke.Ai" }), "evoke.ai");
+        assert.equal(resolveResearchDomain({ email: "rahul@acmelogistics.in" }), "acmelogistics.in");
+    });
+
+    test("discovered website is accepted only when the page names the brand", () => {
+        assert.deepEqual(companyCoreTokens("HCL Technologies Pvt Ltd"), ["hcl"]);
+        assert.equal(siteMatchesCompany("HCL Technologies", { url: "https://www.hcltech.com/", title: "HCLTech | Supercharging Progress" }), true);
+        assert.equal(siteMatchesCompany("HCL Technologies", { url: "https://www.parked-domain.com/", title: "Buy this domain" }), false);
+        assert.equal(siteMatchesCompany("Acme Logistics", { url: "https://acme.in/", title: "Welcome", siteName: "Acme" }), true);
     });
 });
 
@@ -98,6 +109,7 @@ describe("evidence grounding and research state", () => {
 
     test("name-only model lookup is never grounded, even if relabelled or given a URL", () => {
         assert.equal(isGroundedResearch(nameOnly), false);
+        assert.equal(isUsableResearchProfile(nameOnly), false);
         assert.equal(isGroundedResearch({ ...nameOnly, qualityStatus: "PARTIAL_RESEARCH" }), false);
         assert.equal(isGroundedResearch({ ...nameOnly, qualityStatus: "ACCEPTABLE", sources: [{ url: "https://acme.in/" }] }), false);
     });

@@ -54,11 +54,12 @@ export async function enqueueEmailPersonalizationJob(lead, research = null) {
     if (!lead?.id) return null;
     if (!shouldEnqueueToRedis() || !getQueue(QUEUE_NAMES.EMAIL_PERSONALIZATION)) return null;
     const orgId = Number(lead.organization_id || 1);
+    // Do not reuse a sticky job id: completed BullMQ jobs can block re-draft after research refresh.
     return addQueueJob(
         QUEUE_NAMES.EMAIL_PERSONALIZATION,
         JOB_NAMES.DRAFT_EMAIL,
         { leadId: Number(lead.id), organizationId: orgId, userId: lead.user_id || null, hasResearch: Boolean(research) },
-        { jobId: `draft:${orgId}:${lead.id}` }
+        { jobId: `draft:${orgId}:${lead.id}:${Date.now()}` }
     );
 }
 

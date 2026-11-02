@@ -50,6 +50,7 @@ export function evaluateCapacity({
     dialsThisTick = 0,
     hasEmail = true,
     autonomous = true,
+    botDial = false,
 } = {}) {
     const maxNewDials = computeMaxNewDials({ freeReps, openHotCallbacks });
     const act = String(action || "").toUpperCase();
@@ -64,7 +65,8 @@ export function evaluateCapacity({
     const remainingDials = Math.max(0, maxNewDials - Number(dialsThisTick || 0));
 
     if (act === "CALL") {
-        if (queueDeep || remainingDials <= 0 || callsCapHit) {
+        const noHumanSlot = !botDial && remainingDials <= 0;
+        if (queueDeep || noHumanSlot || callsCapHit) {
             const shiftedAction = hasEmail && !emailsCapHit ? "EMAIL" : "WAIT";
             const reason = queueDeep
                 ? CAPACITY_REASONS.CALLBACK_QUEUE_DEEP

@@ -77,6 +77,30 @@ test("one free rep and an empty callback queue allows two new dials this tick", 
     assert.equal(third.reason, CAPACITY_REASONS.NO_DIAL_CAPACITY);
 });
 
+test("bot cadence CALL is not blocked when no human is free", () => {
+    const blocked = evaluateCapacity({
+        action: "CALL",
+        freeReps: 0,
+        openHotCallbacks: 0,
+        overdueCallbacks: 0,
+        autonomous: true,
+        botDial: false,
+    });
+    const bot = evaluateCapacity({
+        action: "CALL",
+        freeReps: 0,
+        openHotCallbacks: 4,
+        overdueCallbacks: 0,
+        callsThisHour: 0,
+        callsPerHour: 20,
+        autonomous: true,
+        botDial: true,
+    });
+    assert.equal(blocked.allowed, false);
+    assert.equal(blocked.reason, CAPACITY_REASONS.NO_DIAL_CAPACITY);
+    assert.equal(bot.allowed, true);
+});
+
 test("hourly call cap blocks CALL and hourly email cap defers EMAIL", () => {
     const callCap = evaluateCapacity({
         action: "CALL",

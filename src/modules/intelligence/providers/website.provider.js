@@ -401,7 +401,7 @@ export async function fetchCitedPage(url) {
     return { url: res.url, title, text: htmlToText(res.html).slice(0, 200000), retrievedAt: new Date().toISOString() };
 }
 
-export async function fetchCompanySite(domain) {
+export async function fetchCompanySite(domain, { acceptHome = null } = {}) {
     if (!domain) return [];
     const deadline = Date.now() + CRAWL_BUDGET_MS;
     let home = null;
@@ -418,6 +418,7 @@ export async function fetchCompanySite(domain) {
         } catch {}
     }
     if (!home || (!home.title && !home.description && !home.excerpt) || isPlaceholderPage(home)) return [];
+    if (acceptHome && !acceptHome(home)) return [];
 
     const robots = parseRobots(await fetchText(`${origin}/robots.txt`));
     if (!robots.isAllowed(new URL(home.url).pathname)) return [];

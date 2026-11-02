@@ -1,5 +1,5 @@
 const STAT_PATTERN = /\b\d+(\.\d+)?\s?(%|percent|x)\b|\$\s?\d|\bROI\b|\bguarantee[ds]?\b|\b\d+\s?(customers|clients|users|million|billion)\b/i;
-const INJECTION_PATTERN = /ignore (all |any |previous |prior )?instructions|system prompt|reveal (the )?(secret|api key)|you are now/i;
+export const INJECTION_PATTERN = /ignore (all |any |previous |prior )?instructions|system prompt|reveal (the )?(secret|api key)|you are now/i;
 const CONVERSATION_CLAIM_PATTERN = /\b(as (we|i) (discussed|spoke|talked|mentioned)|as discussed|(great|nice|good|lovely) (speaking|talking|chatting|connecting) (with|to) you|(great|nice|good) to (speak|talk|chat|connect) (with|to) you|thanks? (you )?for (taking|your time on|the) (my |our |the )?(call|time on the phone|conversation|chat)|per our (call|conversation|discussion|chat)|following up on our (call|conversation|discussion|chat)|when we (spoke|talked|chatted)|you (mentioned|told me|said) (on|during) (the|our) (call|conversation)|as promised (on|during) (the|our) call|during our (call|conversation|chat)|our (recent|earlier) (call|conversation|chat))\b/i;
 const NEAR_DUPLICATE_THRESHOLD = 0.8;
 

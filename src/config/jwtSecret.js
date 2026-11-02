@@ -60,7 +60,11 @@ export function resolveJwtConfig(source = process.env) {
 
 export class JwtConfigError extends Error {
     constructor(errors) {
-        super(`Invalid JWT configuration: ${errors.join("; ")}. Generate a secret with: ${GENERATE_SECRET_HINT}`);
+        super(
+            `Invalid JWT configuration: ${errors.join("; ")}. ` +
+            `Set JWT_SECRET in the host environment (Render Dashboard → Environment), then redeploy. ` +
+            `Generate a secret with: ${GENERATE_SECRET_HINT}`
+        );
         this.name = "JwtConfigError";
         this.code = "JWT_CONFIG_INVALID";
         this.errors = errors;
