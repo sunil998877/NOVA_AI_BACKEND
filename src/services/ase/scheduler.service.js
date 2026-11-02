@@ -223,7 +223,8 @@ class AseScheduler {
             return { executed: false, reason: "Lead missing or action changed" };
         }
 
-        if (action === "EMAIL") {
+        // Human-approved / forced EMAIL must not be hijacked by call-first cadence
+        if (action === "EMAIL" && !force && !options.approved && !options.manual) {
             const rerouted = await startCallFirstCadence(workingLead);
             if (rerouted.handled) {
                 return { executed: false, reason: "Rerouted first touch to call cadence" };

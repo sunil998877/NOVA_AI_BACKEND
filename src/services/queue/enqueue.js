@@ -41,13 +41,20 @@ export async function enqueueCompanyResearchJob(lead, { force = false } = {}) {
     if (!lead?.id) return null;
     if (!shouldEnqueueToRedis() || !getQueue(QUEUE_NAMES.COMPANY_RESEARCH)) return null;
     const orgId = Number(lead.organization_id || 1);
-    const refreshBucket = force ? `:refresh:${Math.floor(Date.now() / 60000)}` : "";
-    return addQueueJob(
+    // Unique job ids avoid completed BullMQ jobs blocking re-research forever.
+    // Minute bucket still collapses burst duplicates within the same minute unless force=true.
+    const refreshBucket = force
+        ? `:refresh:${Date.now()}`
+        : `:t:${Math.floor(Date.now() / 60000)}`;
+    const queued = await addQueueJob(
         QUEUE_NAMES.COMPANY_RESEARCH,
         JOB_NAMES.RESEARCH_COMPANY,
         { leadId: Number(lead.id), organizationId: orgId, userId: lead.user_id || null, force: Boolean(force) },
         { jobId: `research:${orgId}:${lead.id}${refreshBucket}` }
     );
+    // Treat sticky duplicates as "not queued" so callers can fall back in-process.
+    if (queued?.duplicate) return null;
+    return queued;
 }
 
 export async function enqueueEmailPersonalizationJob(lead, research = null) {

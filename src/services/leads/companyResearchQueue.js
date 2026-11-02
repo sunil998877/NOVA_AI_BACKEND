@@ -118,7 +118,8 @@ export function enqueueLeadCompanyResearch(lead) {
     if (!lead?.id) return;
     enqueueCompanyResearchJob(lead)
         .then((queued) => {
-            if (queued) return;
+            // null / duplicate → run in-process so drafts are not stuck when workers are down
+            if (queued && !queued.duplicate) return;
             pending.push(lead);
             drain();
         })

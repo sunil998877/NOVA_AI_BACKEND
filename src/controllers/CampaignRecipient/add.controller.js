@@ -26,11 +26,20 @@ export const addCampaignRecipients = asyncHandler(async (req, res) => {
 
     const toAdd = safeIds.filter((id) => !existing.has(id));
 
+    let added = 0;
+
     if (toAdd.length > 0) {
         const contacts = await Promise.all(toAdd.map((id) => Contact.findById(id)));
         const validContacts = contacts.filter(Boolean);
 
-        await CampaignRecipient.addMany(campaign.id, validContacts.map((c) => c.id));
+        if (validContacts.length === 0) {
+            return res.status(400).json({ error: "No valid contacts found for the provided IDs" });
+        }
+
+        await CampaignRecipient.addMany(
+            campaign.id,
+            validContacts.map((c) => c.id)
+        );
 
         const mailDocs = validContacts.map((contact) => ({
             campaign_id: campaign.id,
@@ -46,11 +55,18 @@ export const addCampaignRecipients = asyncHandler(async (req, res) => {
         if (mailDocs.length > 0) {
             await Mail.insertMany(mailDocs);
         }
+
+        added = validContacts.length;
     }
 
     const total = await CampaignRecipient.countByCampaign(campaign.id);
 
     await Campaign.updateById(campaign.id, { total_recipients: total });
 
-    return res.status(200).json({ total, added: toAdd.length, skipped: safeIds.length - toAdd.length });
+    return res.status(200).json({
+        success: true,
+        total,
+        added,
+        skipped: safeIds.length - added,
+    });
 });
