@@ -1,10 +1,11 @@
 import crypto from "crypto";
-import jwt from "jsonwebtoken";
 import { env } from "../../../config/env.js";
+import { signPurposeToken, verifyPurposeToken } from "../../../utils/jwt.js";
 import { CrmConnection } from "../../../models/crm-connection.model.js";
 import { processBatch, processLead, LEAD_SOURCES } from "../leadIntake.service.js";
 
 const PROVIDER = "hubspot";
+const STATE_PURPOSE = "hubspot_oauth_state";
 const API_BASE = "https://api.hubapi.com";
 const AUTH_URL = "https://app.hubspot.com/oauth/authorize";
 const CONTACT_PROPS = ["email", "firstname", "lastname", "company", "phone", "lastmodifieddate"];
@@ -17,7 +18,7 @@ export function buildAuthorizeUrl(userId) {
     if (!isOAuthConfigured()) {
         throw new Error("HubSpot OAuth is not configured (HUBSPOT_CLIENT_ID / SECRET / REDIRECT_URI)");
     }
-    const state = jwt.sign({ sub: String(userId), p: PROVIDER }, env.jwtSecret, { expiresIn: "10m" });
+    const state = signPurposeToken(STATE_PURPOSE, { sub: String(userId) }, "10m");
     const params = new URLSearchParams({
         client_id: cfg().clientId,
         redirect_uri: cfg().redirectUri,
@@ -28,9 +29,11 @@ export function buildAuthorizeUrl(userId) {
 }
 
 export function verifyState(state) {
-    const payload = jwt.verify(String(state || ""), env.jwtSecret);
-    if (payload.p !== PROVIDER) throw new Error("Invalid OAuth state");
-    return payload.sub;
+    try {
+        return verifyPurposeToken(state, STATE_PURPOSE).sub;
+    } catch {
+        throw new Error("Invalid OAuth state");
+    }
 }
 
 async function tokenRequest(body) {

@@ -59,7 +59,7 @@ describe("Fully Automated Lead Follow-Up with Start, Pause, Resume, and Stop Con
         await execute(`DELETE FROM suppressions WHERE organization_id = ?`, [testOrgId]).catch(() => {});
     });
 
-    test("1. Import an eligible lead while automation is enabled: enrollment occurs automatically", async () => {
+    test("1. Import an eligible lead: no follow-up before the approved first email is sent, then enrollment schedules 5 touches", async () => {
         const importResult = await LeadIntakeService.processBatch([
             {
                 name: "Ada Lovelace",
@@ -76,7 +76,9 @@ describe("Fully Automated Lead Follow-Up with Start, Pause, Resume, and Stop Con
         assert.equal(importResult.accepted, 1);
         const lead = await Lead.findByEmail(testOrgId, "ada.lovelace@analytical-engine.org");
         assert.ok(lead);
+        assert.equal((await FollowUpEnrollment.findByLeadId(lead.id, testOrgId)).length, 0);
 
+        await followUpEngine.enrollLead(lead, { sentAt: new Date(), subject: "First touch", messageId: "msg_ada_1" });
         const enrollments = await FollowUpEnrollment.findByLeadId(lead.id, testOrgId);
         assert.ok(enrollments.length > 0);
         const enrollment = enrollments[0];
@@ -129,6 +131,8 @@ describe("Fully Automated Lead Follow-Up with Start, Pause, Resume, and Stop Con
 
         assert.equal(firstImport.accepted, 1);
         const lead = await Lead.findByEmail(testOrgId, "grace.hopper@compiler-navy.mil");
+        await followUpEngine.enrollLead(lead, { sentAt: new Date(), subject: "First touch", messageId: "msg_grace_1" });
+        await followUpEngine.enrollLead(lead, { sentAt: new Date(), subject: "First touch", messageId: "msg_grace_1" });
         const enr1 = await FollowUpEnrollment.findByLeadId(lead.id, testOrgId);
         assert.ok(enr1.length > 0);
 

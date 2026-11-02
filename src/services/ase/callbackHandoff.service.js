@@ -1,11 +1,12 @@
 import { Lead } from "../../models/lead.model.js";
 import { Callback } from "../../models/callback.model.js";
 import { AseExecution } from "../../models/ase-execution.model.js";
-import { ASE_OUTCOMES } from "./outcomeNormalizer.service.js";
+import { ASE_OUTCOMES, classifyProspectSpeech, extractCallTranscript } from "./outcomeNormalizer.service.js";
 import { transitionLeadState } from "./leadStateMachine.js";
 import { eventBus } from "./eventBus.service.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
 import { applyHotLeadAssignment } from "./routingAssign.service.js";
+import { HANDOFF_STATUSES, setHandoffStatus } from "./handoffStatus.service.js";
 
 const CALLBACK_SLA_MS = 30 * 60 * 1000;
 
@@ -55,7 +56,28 @@ export async function queueCallbackHandoff(lead, rawData = {}, extras = {}) {
         notes: extras.notes || "Automated handoff: Prospect showed interest / requested callback.",
     });
 
-    await followUpEngine.handleMeetingBooked(lead.id, orgId).catch(() => {});
+    await followUpEngine.handleHumanHandoff(lead.id, orgId, "Callback queued for a sales rep").catch(() => {});
+    const meetingRequested = Boolean(
+        extras.meetingRequested
+        ?? rawData.meetingRequested
+        ?? classifyProspectSpeech(extractCallTranscript(rawData)).meetingRequested
+    );
+    if (meetingRequested) {
+        const { requestMeeting } = await import("./meetingBooking.service.js");
+        await requestMeeting(orgId, lead.id, {
+            source: rawData.channel || "VOICE",
+            sourceRef: callId ? `call_${callId}` : null,
+            repUserId: assignedRepId,
+            preferredText: "Prospect asked to book a meeting on the call; rep to confirm date, time and timezone.",
+        }).catch((err) => console.warn("[Handoff] meeting request failed:", err.message));
+    } else {
+        await setHandoffStatus(lead, HANDOFF_STATUSES.CALLBACK_PENDING, {
+            orgId,
+            source: rawData.channel || "VOICE",
+            reason: extras.reason || (outcome === ASE_OUTCOMES.CALLBACK ? "Prospect requested a callback" : "Prospect showed interest"),
+            callId,
+        }).catch((err) => console.warn("[Handoff] status update failed:", err.message));
+    }
     await AseExecution.cancelOpenForLead(orgId, lead.id, "Human callback queued — no second bot call").catch(() => 0);
 
     const updated = await Lead.updateById(

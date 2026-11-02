@@ -176,14 +176,14 @@ export const listReplies = asyncHandler(async (req, res) => {
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 
     const rows = await query(
-        `SELECT le.id, le.lead_id, le.event_type, le.status, le.payload, le.createdAt,
+        `SELECT le.id, le.lead_id, le.event_type, le.status, le.payload, le.created_at AS createdAt,
                 l.name AS lead_name, l.email AS lead_email, l.company AS lead_company,
                 fe.id AS enrollment_id, fe.status AS sequence_status, fe.reply_outcome
          FROM lead_events le
          LEFT JOIN leads l ON l.id = le.lead_id
          LEFT JOIN follow_up_enrollments fe ON fe.lead_id = le.lead_id
          WHERE le.organization_id = ? AND le.event_type = 'EMAIL_REPLY_RECEIVED'
-         ORDER BY le.createdAt DESC LIMIT ? OFFSET ?`,
+         ORDER BY le.created_at DESC LIMIT ? OFFSET ?`,
         [orgId, limit, offset]
     );
 

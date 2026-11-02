@@ -3,6 +3,7 @@ import { AseApproval } from "../../models/ase-approval.model.js";
 import { Lead } from "../../models/lead.model.js";
 import { LeadEvent } from "../../models/lead-event.model.js";
 import { Callback } from "../../models/callback.model.js";
+import { EmailReplyDraft } from "../../models/email-reply-draft.model.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
 import { stopCadenceForLead } from "./cadence/cadenceHalt.js";
 
@@ -11,10 +12,11 @@ export async function haltOutreachForLead(orgId, leadId, reason = "Do not contac
     const org = Number(orgId || 1);
     if (!id) return { cancelledExecutions: 0, cancelledApprovals: 0, cancelledCallbacks: 0 };
 
-    const [cancelledExecutions, cancelledApprovals, cancelledCallbacks] = await Promise.all([
+    const [cancelledExecutions, cancelledApprovals, cancelledCallbacks, cancelledReplyDrafts] = await Promise.all([
         AseExecution.cancelOpenForLead(org, id, reason).catch(() => 0),
         AseApproval.cancelPendingForLead(org, id, reason).catch(() => 0),
         Callback.cancelOpenForLead(org, id, reason).catch(() => 0),
+        EmailReplyDraft.cancelOpenForLead(org, id, reason).catch(() => 0),
         followUpEngine.handleSuppression(id, org, reason).catch(() => null),
         stopCadenceForLead(org, id, reason).catch(() => null),
         Lead.updateById(id, { next_action: null, next_action_time: null }, org).catch(() => null),
@@ -26,7 +28,7 @@ export async function haltOutreachForLead(orgId, leadId, reason = "Do not contac
         channel: "SYSTEM",
         event_type: "OUTREACH_HALTED",
         status: "CANCELLED",
-        payload: { reason, cancelledExecutions, cancelledApprovals, cancelledCallbacks },
+        payload: { reason, cancelledExecutions, cancelledApprovals, cancelledCallbacks, cancelledReplyDrafts },
         idempotency_key: `outreach_halted_${org}_${id}_${String(reason).slice(0, 40)}`,
     }).catch(() => {});
 

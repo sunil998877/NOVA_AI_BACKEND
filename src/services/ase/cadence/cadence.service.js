@@ -234,7 +234,7 @@ async function scheduleSteps(enrollment, planned, { modelRec = null, reviveCance
     return created;
 }
 
-export async function enrollLead(orgId, leadId, { policyId = null, actorId = null, startNow = false, confirmReview = false } = {}) {
+export async function enrollLead(orgId, leadId, { policyId = null, actorId = null, startNow = false, confirmReview = false, skipModel = false } = {}) {
     const ctx = await checkEligibility(orgId, leadId, { policyId });
     const { lead, policy, settings, eligibility, timezone, openEnrollment } = ctx;
     if (openEnrollment) return { enrolled: false, reason: "ALREADY_ENROLLED", enrollment: openEnrollment, eligibility };
@@ -259,7 +259,7 @@ export async function enrollLead(orgId, leadId, { policyId = null, actorId = nul
     });
     if (!created) return { enrolled: false, reason: "ALREADY_ENROLLED", enrollment, eligibility };
 
-    const modelRec = await modelRecommendation(lead);
+    const modelRec = skipModel ? null : await modelRecommendation(lead);
     const steps = await scheduleSteps(enrollment, [first], { modelRec });
     const queued = transitionLeadState(lead.status, first.action === CADENCE_ACTIONS.CALL ? "DISPATCH_CALL" : "DISPATCH_EMAIL");
     await Lead.updateById(lead.id, {
@@ -280,6 +280,25 @@ export async function enrollLead(orgId, leadId, { policyId = null, actorId = nul
         modelRecommendation: modelRec,
     }, `cadence_enrolled_${enrollment.id}`, ENROLLMENT_STATUS.ACTIVE);
     return { enrolled: true, enrollment, steps, eligibility };
+}
+
+/** CSV / API / form intake: enroll in the default call-first cadence without blocking ingest. */
+export async function autoEnrollIntakeLead(orgId, lead, { actorId = null } = {}) {
+    if (!lead?.id) return { enrolled: false, reason: "NO_LEAD" };
+    if (lead.do_not_contact || String(lead.status || "").toUpperCase() === "SUPPRESSED_DNC") {
+        return { enrolled: false, reason: "SUPPRESSED" };
+    }
+    try {
+        return await enrollLead(orgId, lead.id, {
+            actorId: actorId ? Number(actorId) : null,
+            startNow: false,
+            confirmReview: true,
+            skipModel: true,
+        });
+    } catch (err) {
+        console.warn(`[Cadence] Intake auto-enroll skipped for lead ${lead.id}: ${err.message}`);
+        return { enrolled: false, reason: err.message };
+    }
 }
 
 async function applyDecision(enrollment, step, plan, { lead = null } = {}) {

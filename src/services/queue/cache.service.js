@@ -105,23 +105,23 @@ export async function withCycleLock(name, ttlMs, fn) {
     }
 }
 
-export async function getCachedResearch(domain) {
-    if (!domain) return null;
-    const payload = await cacheGet(CACHE_KEYS.RESEARCH(domain));
+export async function getCachedResearch(domain, orgId) {
+    if (!domain || !orgId) return null;
+    const payload = await cacheGet(CACHE_KEYS.RESEARCH(orgId, domain));
     if (!payload || payload.schemaVersion !== RESEARCH_CACHE_SCHEMA) return null;
     return payload.research || null;
 }
 
-export async function setCachedResearch(domain, research) {
-    if (!domain || !research) return false;
-    return cacheSet(CACHE_KEYS.RESEARCH(domain), {
+export async function setCachedResearch(domain, research, orgId) {
+    if (!domain || !research || !orgId) return false;
+    return cacheSet(CACHE_KEYS.RESEARCH(orgId, domain), {
         schemaVersion: RESEARCH_CACHE_SCHEMA,
         research,
         cachedAt: new Date().toISOString(),
     });
 }
 
-export async function invalidateResearch(domain) {
-    if (!domain) return false;
-    return cacheDel(CACHE_KEYS.RESEARCH(domain));
+export async function invalidateResearch(domain, orgId) {
+    if (!domain || !orgId) return false;
+    return cacheDel(CACHE_KEYS.RESEARCH(orgId, domain));
 }

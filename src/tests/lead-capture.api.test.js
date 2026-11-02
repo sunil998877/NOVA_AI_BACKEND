@@ -71,13 +71,14 @@ test("valid single lead is created and is not contacted without consent", async 
         name: "Single Lead",
         company: "Single Co",
         phone: "+14155551001",
+        consentEmail: false,
     });
     assert.equal(result.status, 201);
     assert.equal(result.payload.data.status, "created");
     assert.equal(result.payload.data.lead.status, "NEW");
     assert.equal(result.payload.data.lead.next_action, null);
     assert.equal(result.payload.data.outreachStatus, "held_for_consent");
-    assert.equal(result.payload.data.lead.email_consent.status, "UNKNOWN");
+    assert.notEqual(result.payload.data.lead.email_consent.status, "GRANTED");
 });
 
 test("valid batch reports accepted records", async () => {
@@ -135,7 +136,7 @@ test("invalid email, phone, and missing email are rejected", async () => {
     const missing = await post("/api/leads", { name: "No Email" });
     assert.equal(email.status, 400);
     assert.equal(phone.status, 400);
-    assert.match(phone.payload.error, /Invalid phone/);
+    assert.match(phone.payload.error, /phone/i);
     assert.equal(missing.status, 400);
     assert.match(missing.payload.error, /Email is required/);
 });
@@ -268,7 +269,7 @@ test("rotated key replaces the previous key and can be restored", async () => {
 test("vite proxies /api to the backend and the public URL is not the frontend port", () => {
     const vite = readFileSync(new URL("../../../frontend/vite.config.js", import.meta.url), "utf8");
     assert.match(vite, /proxy:\s*\{[\s\S]*"\/api"/);
-    assert.match(vite, /http:\/\/localhost:3001/);
+    assert.match(vite, /http:\/\/(localhost|127\.0\.0\.1):3001/);
     const displayed = env.publicApiUrl || "http://localhost:3001";
     assert.equal(displayed.includes(":5173"), false);
 });

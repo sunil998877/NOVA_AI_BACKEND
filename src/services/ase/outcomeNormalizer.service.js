@@ -147,6 +147,8 @@ export function classifyProspectSpeech(raw = "") {
     const firstPersonInterest = /\b(i(?:'m| am) interested|we(?:'re| are) interested|sounds good|tell me more|send (?:me )?details|book a (?:call|demo|meeting)|let'?s (?:talk|connect|book|schedule)|yes[, ]+i (?:am|would)|i(?:'d| would) like to (?:schedule|book|set up))\b/;
     const affirmativeMeeting = /\b(yes|yeah|yep|sure|please|i want|let'?s|book|set up|setup)\b[\s\S]{0,60}\b(demo|meeting|schedule)\b/;
 
+    const meetingAsk = /\b(book a (?:call|demo|meeting)|let'?s (?:book|schedule)|i(?:'d| would) like to (?:schedule|book|set up))\b/;
+
     if (firstPersonInterest.test(prospectText) || affirmativeMeeting.test(prospectText)) {
         return {
             outcome: ASE_OUTCOMES.INTERESTED,
@@ -154,6 +156,7 @@ export function classifyProspectSpeech(raw = "") {
             isDnc: false,
             callbackRequested: false,
             interested: true,
+            meetingRequested: affirmativeMeeting.test(prospectText) || meetingAsk.test(prospectText),
         };
     }
 

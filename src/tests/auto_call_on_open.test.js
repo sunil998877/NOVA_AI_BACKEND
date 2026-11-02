@@ -198,12 +198,23 @@ describe("Automatic AI Calling After Email Opens in NOVA + ASE", () => {
       name: "Alex Taylor",
     };
 
-    const execution = await voiceAdapter.execute(lead, "CALL", {
-      callId: 9001,
-      prompt: "Hello Alex, this is Nova following up on your email open.",
-    });
+    const plivoKeys = ["PLIVO_AUTH_ID", "PLIVO_AGENT_AUTH_ID", "PLIVO_AUTH_TOKEN", "PLIVO_AGENT_AUTH_TOKEN", "PLIVO_PHONE_NUMBER"];
+    const saved = Object.fromEntries(plivoKeys.map((key) => [key, process.env[key]]));
+    plivoKeys.forEach((key) => delete process.env[key]);
+    let execution;
+    try {
+      execution = await voiceAdapter.execute(lead, "CALL", {
+        callId: 9001,
+        prompt: "Hello Alex, this is Nova following up on your email open.",
+      });
+    } finally {
+      plivoKeys.forEach((key) => {
+        if (saved[key] !== undefined) process.env[key] = saved[key];
+      });
+    }
 
     assert.ok(execution);
+    assert.equal(execution.metadata?.simulated ?? execution.rawResponse?.simulated, true);
     assert.equal(execution.channel, "VOICE");
     assert.equal(execution.status, "SUCCEEDED");
     assert.ok(execution.metadata?.providerCallId);

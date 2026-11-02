@@ -7,6 +7,7 @@ if (dns.setDefaultResultOrder) {
 }
 import http from "http";
 import { env } from "./config/env.js";
+import { enforceJwtConfigOrExit } from "./config/jwtSecret.js";
 import { connectDb } from "./config/db.js";
 import { app } from "./app.js";
 import { initSocketServer } from "./socket/socketServer.js";
@@ -21,6 +22,7 @@ import { jobQueue } from "./services/ase/jobQueue.service.js";
 
 
 const startServer = () => {
+    enforceJwtConfigOrExit("API");
     const httpServer = http.createServer(app);
 
     initSocketServer(httpServer);

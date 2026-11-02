@@ -32,7 +32,7 @@ export async function researchLeadCompany(lead, options = {}) {
     if (!fresh || fresh.do_not_contact) return null;
 
     const existing = readMetadata(fresh);
-    if (isUsableResearchProfile(existing.company_research)) {
+    if (!options.force && isUsableResearchProfile(existing.company_research)) {
         if (!options.skipDraft && !existing.outreach_email?.subject) {
             await storeOutreachDraft(fresh, existing.company_research);
         } else if (existing.company_research_status === "pending") {
@@ -49,7 +49,7 @@ export async function researchLeadCompany(lead, options = {}) {
     const domain = fresh.email ? fresh.email.split("@")[1] : null;
     let research = null;
     try {
-        research = await researchCompany(fresh.company, { domain, leadInfo: fresh });
+        research = await researchCompany(fresh.company, { domain, leadInfo: fresh, force: Boolean(options.force) });
     } catch (error) {
         console.error("[CompanyResearch] Research failed:", error.message);
     }
@@ -60,7 +60,8 @@ export async function researchLeadCompany(lead, options = {}) {
     const metadata = {
         ...latestMeta,
         company_research: usable ? research : (latestMeta.company_research || research || null),
-        company_research_status: usable ? "ready" : "pending",
+        company_research_status: usable ? "ready" : "failed",
+        ...(usable ? {} : { company_research_failed_at: new Date().toISOString() }),
     };
 
     const researched = await Lead.updateById(fresh.id, { metadata }, orgId);

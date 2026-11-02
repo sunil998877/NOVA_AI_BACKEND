@@ -3,6 +3,7 @@ import { LeadEvent } from "../../models/lead-event.model.js";
 import { Suppression } from "../../models/suppression.model.js";
 import { OrchestratorService } from "../ase/orchestrator.service.js";
 import { enqueueLeadCompanyResearch } from "./companyResearchQueue.js";
+import { env } from "../../config/env.js";
 import { eventBus } from "../ase/eventBus.service.js";
 import { query } from "../../config/db.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
@@ -73,6 +74,22 @@ async function withLocks(keys, fn) {
 }
 
 const isDuplicateKey = (error) => error?.code === "ER_DUP_ENTRY" || error?.errno === 1062;
+
+async function maybeAutoEnrollCadence(lead, { organizationId, userId, autoEnroll }) {
+    if (!lead?.id || autoEnroll === false || env.autoEnrollCadence === false) {
+        return { enrolled: false, reason: "DISABLED", lead };
+    }
+    try {
+        const { autoEnrollIntakeLead } = await import("../ase/cadence/cadence.service.js");
+        const result = await autoEnrollIntakeLead(organizationId, lead, { actorId: userId });
+        if (!result?.enrolled) return { ...result, lead };
+        const fresh = await Lead.findById(lead.id, organizationId);
+        return { ...result, lead: fresh || lead };
+    } catch (err) {
+        console.warn(`[Intake] Cadence auto-enroll skipped for lead ${lead.id}: ${err.message}`);
+        return { enrolled: false, reason: err.message, lead };
+    }
+}
 
 const consentRecord = (explicit, flag, source) => consentFromIntake(explicit, flag, source);
 
@@ -183,7 +200,7 @@ export async function processLead(rawLead, options = {}) {
         domain,
         suppressedCache,
         existingCache,
-        autoEnroll: options.autoEnroll,
+        autoEnroll: options.autoEnroll !== false,
         campaignId: options.campaignId,
         sequenceId: options.sequenceId,
         sentAt: options.sentAt,
@@ -284,7 +301,10 @@ async function ingestLockedLead(data, {
             payload: { email: data.email, updatedFields: Object.keys(data) },
         });
 
-        return { status: "updated", lead: updated };
+        const cadence = isSuppressed
+            ? { enrolled: false, reason: "SUPPRESSED", lead: updated }
+            : await maybeAutoEnrollCadence(updated, { organizationId, userId, autoEnroll });
+        return { status: "updated", lead: cadence.lead || updated, cadence };
     }
 
     const isSuppressedBool = Boolean(isSuppressed);
@@ -337,7 +357,10 @@ async function ingestLockedLead(data, {
             },
             organizationId
         );
-        return { status: "updated", reason: "duplicate", lead: merged };
+        const cadence = isSuppressed
+            ? { enrolled: false, reason: "SUPPRESSED", lead: merged }
+            : await maybeAutoEnrollCadence(merged, { organizationId, userId, autoEnroll });
+        return { status: "updated", reason: "duplicate", lead: cadence.lead || merged, cadence };
     }
 
     await LeadEvent.create({
@@ -365,10 +388,12 @@ async function ingestLockedLead(data, {
     }
 
     enqueueLeadCompanyResearch({ ...lead, organization_id: organizationId, user_id: userId });
+    const cadence = await maybeAutoEnrollCadence(lead, { organizationId, userId, autoEnroll });
 
     return {
         status: "created",
-        lead,
+        lead: cadence.lead || lead,
+        cadence,
         ...(emailAllowed ? {} : { outreachStatus: "held_for_consent" }),
     };
 }

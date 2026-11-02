@@ -165,6 +165,7 @@ function asList(value) {
 }
 
 function asPairs(value, leftKey, rightKey) {
+    if (typeof value === "string") value = value.split(/\r?\n/).filter((line) => line.includes("|"));
     if (Array.isArray(value)) {
         return value
             .map((item) => {

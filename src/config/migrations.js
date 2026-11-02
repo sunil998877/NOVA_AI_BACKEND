@@ -803,6 +803,36 @@ export async function runMigrations(pool) {
         migrateLeadPhoneInternational(pool),
         migrateCadenceScale(pool),
     ]);
+    await migrateLeadHandoffStatus(pool);
+}
+
+async function migrateLeadHandoffStatus(pool) {
+    try {
+        const [cols] = await pool.query(
+            `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads'
+               AND COLUMN_NAME IN ('handoff_status', 'handoff_updated_at')`
+        );
+        const existing = new Set(cols.map((row) => row.COLUMN_NAME));
+        if (!existing.has("handoff_status")) {
+            await pool.query("ALTER TABLE leads ADD COLUMN handoff_status VARCHAR(32) NULL");
+            console.log("[Migration] Added column 'handoff_status' to leads");
+        }
+        if (!existing.has("handoff_updated_at")) {
+            await pool.query("ALTER TABLE leads ADD COLUMN handoff_updated_at DATETIME NULL");
+            console.log("[Migration] Added column 'handoff_updated_at' to leads");
+        }
+        const [idx] = await pool.query(
+            `SELECT INDEX_NAME FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads' AND INDEX_NAME = 'idx_leads_handoff_status'`
+        );
+        if (!idx.length) {
+            await pool.query("CREATE INDEX idx_leads_handoff_status ON leads (organization_id, handoff_status)");
+            console.log("[Migration] Added idx_leads_handoff_status on leads");
+        }
+    } catch (err) {
+        console.error("[Migration] leads.handoff_status:", err.message);
+    }
 }
 
 const CADENCE_OPEN_SLOT_SQL = "CASE WHEN status IN ('ACTIVE', 'PAUSED', 'NEEDS_REVIEW', 'HANDOFF', 'CALLBACK', 'REPLIED') THEN 1 ELSE NULL END";

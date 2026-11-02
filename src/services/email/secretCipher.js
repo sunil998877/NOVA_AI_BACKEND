@@ -6,7 +6,9 @@ const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
 
 function getDerivedKey() {
-    const rawKey = process.env.EMAIL_SECRET_KEY || env.jwtSecret || "nova-mukh-secret-key-32-chars-default!";
+    // Installs without EMAIL_SECRET_KEY encrypted sender passwords with JWT_SECRET; set EMAIL_SECRET_KEY to that value before rotating JWT_SECRET.
+    const rawKey = String(process.env.EMAIL_SECRET_KEY || "").trim() || env.jwtSecret;
+    if (!rawKey) throw new Error("EMAIL_SECRET_KEY (or JWT_SECRET) must be configured to encrypt sender credentials");
     return crypto.createHash("sha256").update(String(rawKey)).digest();
 }
 

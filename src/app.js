@@ -22,30 +22,33 @@ import senderAccountRoutes from "./routes/sender-account.routes.js";
 import followUpRoutes from "./routes/followUp.routes.js";
 import playbookRoutes from "./routes/playbook.routes.js";
 import aseOperatingRoutes from "./routes/ase-operating.routes.js";
+import intelligenceRoutes from "./modules/intelligence/routes/intelligence.routes.js";
 import { handleN8nChatEvent } from "./controllers/Webhook/n8n-chat.controller.js";
 import { runAseIntegrationTests } from "./tests/ase_integration.test.js";
 import { emailReplyListener } from "./services/ase/emailReplyListener.service.js";
+import { authenticate, requireAseAdmin } from "./middleware/auth.middleware.js";
+import { requireInboundWebhookSecret } from "./middleware/inboundWebhook.middleware.js";
 
 export const app = express();
-app.set("trust proxy", true);
+app.set("trust proxy", env.trustProxy);
+app.disable("x-powered-by");
+
+app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    if (env.nodeEnv === "production") {
+        res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    }
+    next();
+});
 
 app.use(
     cors({
         origin: (origin, callback) => {
             if (!origin) return callback(null, true);
             const normalized = origin.replace(/\/$/, "");
-            if (
-                env.nodeEnv !== "production" ||
-                env.allowedOrigins.includes(normalized) ||
-                env.allowedOrigins.includes(origin) ||
-                normalized.includes("localhost") ||
-                normalized.includes("127.0.0.1") ||
-                normalized.endsWith(".onrender.com") ||
-                normalized.includes("onrender.com") ||
-                normalized.endsWith(".vercel.app") ||
-                normalized.includes("vercel.app") ||
-                normalized.endsWith(".hostingersite.com")
-            ) {
+            if (env.nodeEnv !== "production" || env.allowedOrigins.includes(normalized)) {
                 return callback(null, true);
             }
             return callback(null, false);
@@ -119,7 +122,8 @@ app.get("/api/health", (_req, res) => {
     res.status(200).json({ ok: true });
 });
 
-app.get("/api/engine/test", async (_req, res) => {
+app.get("/api/engine/test", authenticate, requireAseAdmin, async (_req, res) => {
+    if (env.nodeEnv === "production") return res.status(404).json({ error: "Not found" });
     try {
         const results = await runAseIntegrationTests();
         const passed = results.filter((r) => r.passed).length;
@@ -151,6 +155,7 @@ app.use("/api/sender-accounts", senderAccountRoutes);
 app.use("/api/follow-ups", followUpRoutes);
 app.use("/api/playbook", playbookRoutes);
 app.use("/api/ase", aseOperatingRoutes);
+app.use("/api/v1/intelligence", intelligenceRoutes);
 app.post("/api/webhooks/n8n/chat-event", handleN8nChatEvent);
 
 app.all("/api/engine/check-email-replies", async (_req, res) => {
@@ -162,22 +167,26 @@ app.all("/api/engine/check-email-replies", async (_req, res) => {
     }
 });
 
-app.post("/api/engine/inbound-email", async (req, res) => {
+app.post("/api/engine/inbound-email", requireInboundWebhookSecret(), async (req, res) => {
     try {
         const payload = req.body || {};
         const from = payload.from || payload.sender || payload.from_email || payload.envelope?.from || "";
         const subject = payload.subject || "";
         const body = payload.body || payload.text || payload.html || payload.message || payload.reply || "";
-        const messageId = payload.messageId || payload["message-id"] || `webhook_${Date.now()}`;
-        const date = payload.date ? new Date(payload.date) : new Date();
+        const parsedDate = payload.date ? new Date(payload.date) : null;
+        const date = parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : new Date();
+        const toList = (value) => (Array.isArray(value) ? value : String(value || "").split(/\s+/)).filter(Boolean);
 
         const result = await emailReplyListener.handleIncomingReply({
             from,
+            to: payload.to || null,
             subject,
             body,
             rawText: body,
-            messageId,
-            date,
+            messageId: payload.messageId || payload["message-id"] || payload.message_id || null,
+            inReplyTo: payload.inReplyTo || payload["in-reply-to"] || null,
+            references: toList(payload.references),
+            date: parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : null,
         });
 
         if (!result) {
@@ -185,7 +194,8 @@ app.post("/api/engine/inbound-email", async (req, res) => {
         }
         res.status(200).json({ ok: true, result });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error("[InboundEmail] webhook failed:", err.message);
+        res.status(500).json({ error: env.nodeEnv === "production" ? "Inbound email processing failed" : err.message });
     }
 });
 

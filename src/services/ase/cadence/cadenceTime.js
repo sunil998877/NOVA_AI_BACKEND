@@ -40,7 +40,7 @@ export function zonedParts(date, timeZone) {
     };
 }
 
-function zonedToUtc(timeZone, year, month, day, hour, minute) {
+export function zonedToUtc(timeZone, year, month, day, hour, minute) {
     const guess = Date.UTC(year, month - 1, day, hour, minute, 0);
     const actual = zonedParts(new Date(guess), timeZone);
     const actualUtc = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, 0);

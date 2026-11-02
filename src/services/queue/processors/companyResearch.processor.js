@@ -37,7 +37,7 @@ async function reuseResearchForDomain(lead, research) {
 }
 
 export async function processCompanyResearchJob(job) {
-    const { leadId, organizationId } = job.data || {};
+    const { leadId, organizationId, force } = job.data || {};
     const orgId = Number(organizationId || 1);
     const lead = await Lead.findById(leadId, orgId);
     if (!lead) return { skipped: true, reason: "lead_missing" };
@@ -51,7 +51,7 @@ export async function processCompanyResearchJob(job) {
         status: "PENDING",
     });
 
-    const research = await researchLeadCompany(lead, { skipDraft: true });
+    const research = await researchLeadCompany(lead, { skipDraft: true, force: Boolean(force) });
     const usable = isUsableResearchProfile(research);
     if (!usable) {
         emitOrgEvent(orgId, "company_research_failed", { jobId: job.id, leadId: Number(lead.id), status: "failed" });
@@ -59,7 +59,7 @@ export async function processCompanyResearchJob(job) {
     }
 
     const domain = cleanDomain(lead.email ? lead.email.split("@")[1] : research.domain);
-    await setCachedResearch(domain, research);
+    await setCachedResearch(domain, research, orgId);
     const reused = await reuseResearchForDomain(lead, research);
     await enqueueEmailPersonalizationJob(lead, research);
 

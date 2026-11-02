@@ -159,9 +159,14 @@ class FollowUpSchedulerService {
                     return;
                 }
 
-                if (["MEETING_BOOKED", "CALLBACK", "CALLBACK_SCHEDULED", "INTERESTED", "HANDED_OFF", "WARM_TRANSFER"].includes(lead.status)) {
+                if (lead.status === "MEETING_BOOKED" || lead.handoff_status === "MEETING_BOOKED") {
                     await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Meeting already booked" }, orgId);
                     await FollowUpEnrollment.markMeetingBooked(enrollment.id, orgId);
+                    return;
+                }
+                if (["CALLBACK", "CALLBACK_SCHEDULED", "INTERESTED", "HANDED_OFF", "WARM_TRANSFER"].includes(lead.status)) {
+                    await FollowUpTask.updateById(task.id, { status: "CANCELLED", last_error: "Lead handed to a sales rep" }, orgId);
+                    await FollowUpEnrollment.markHandedOff(enrollment.id, "Lead handed to a sales rep", orgId);
                     return;
                 }
 

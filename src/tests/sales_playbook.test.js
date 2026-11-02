@@ -26,6 +26,19 @@ const completePlaybook = {
 
 const lead = { first_name: "Alex", name: "Alex Rivera", company: "Northwind" };
 
+test("FAQs and objections typed in the form as 'Q | A' lines are kept", () => {
+    const { playbook } = validatePlaybook({
+        ...completePlaybook,
+        faqs: "What do you sell? | Harbor Flow.\r\nNo pipe here\nHow do I start? | Book a demo | today.",
+        objections: "Too expensive | Start with a small trial.",
+    });
+    assert.deepEqual(playbook.faqs, [
+        { q: "What do you sell?", a: "Harbor Flow." },
+        { q: "How do I start?", a: "Book a demo | today." },
+    ]);
+    assert.deepEqual(playbook.objections, [{ objection: "Too expensive", response: "Start with a small trial." }]);
+});
+
 test("incomplete playbook cannot send or invent product details", () => {
     const validation = validatePlaybook({ brandName: "Harbor Ops" });
     assert.equal(validation.canSendEmail, false);

@@ -1,7 +1,7 @@
 export const leadSchema = {
     table: "leads",
     columns:
-        "id, organization_id, user_id, name, first_name, last_name, email, company, phone, phone_e164, phone_original, phone_country, phone_calling_code, phone_validation, whatsapp_number, tags, source, external_id, segment_attributes, priority, status, email_consent, voice_consent, whatsapp_consent, assigned_rep_id, next_action, next_action_time, last_contacted_at, attempt_counters, callback_due, disposition, do_not_contact, health, metadata, created_at, updated_at",
+        "id, organization_id, user_id, name, first_name, last_name, email, company, phone, phone_e164, phone_original, phone_country, phone_calling_code, phone_validation, whatsapp_number, tags, source, external_id, segment_attributes, priority, status, email_consent, voice_consent, whatsapp_consent, assigned_rep_id, next_action, next_action_time, last_contacted_at, attempt_counters, callback_due, disposition, do_not_contact, health, handoff_status, handoff_updated_at, metadata, created_at, updated_at",
     updatable: [
         "name",
         "first_name",
@@ -32,6 +32,8 @@ export const leadSchema = {
         "disposition",
         "do_not_contact",
         "health",
+        "handoff_status",
+        "handoff_updated_at",
         "metadata",
     ],
     createTable: `CREATE TABLE IF NOT EXISTS leads (
@@ -68,6 +70,8 @@ export const leadSchema = {
         disposition VARCHAR(64) NULL,
         do_not_contact TINYINT(1) NOT NULL DEFAULT 0,
         health ENUM('GREEN', 'AMBER', 'RED') NOT NULL DEFAULT 'GREEN',
+        handoff_status VARCHAR(32) NULL,
+        handoff_updated_at DATETIME NULL,
         metadata TEXT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

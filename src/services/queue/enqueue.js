@@ -37,15 +37,16 @@ export async function enqueueLeadImportJob({ organizationId, userId, source, upd
     };
 }
 
-export async function enqueueCompanyResearchJob(lead) {
+export async function enqueueCompanyResearchJob(lead, { force = false } = {}) {
     if (!lead?.id) return null;
     if (!shouldEnqueueToRedis() || !getQueue(QUEUE_NAMES.COMPANY_RESEARCH)) return null;
     const orgId = Number(lead.organization_id || 1);
+    const refreshBucket = force ? `:refresh:${Math.floor(Date.now() / 60000)}` : "";
     return addQueueJob(
         QUEUE_NAMES.COMPANY_RESEARCH,
         JOB_NAMES.RESEARCH_COMPANY,
-        { leadId: Number(lead.id), organizationId: orgId, userId: lead.user_id || null },
-        { jobId: `research:${orgId}:${lead.id}` }
+        { leadId: Number(lead.id), organizationId: orgId, userId: lead.user_id || null, force: Boolean(force) },
+        { jobId: `research:${orgId}:${lead.id}${refreshBucket}` }
     );
 }
 

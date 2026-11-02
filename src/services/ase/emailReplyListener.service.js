@@ -13,6 +13,8 @@ import { getIo } from "../../socket/socketServer.js";
 import { followUpEngine } from "../followup/followUpEngine.service.js";
 import { haltOutreachForLead } from "./outreachHalt.service.js";
 import { withCycleLock } from "../queue/cache.service.js";
+import { classifyInboundReply, recordInboundReply } from "./replyApproval.service.js";
+import { REPLY_INTENTS, REPLY_ROUTES } from "../../schema/inbound-email.schema.js";
 
 function extractCleanReply(text) {
     if (!text) return "";
@@ -317,9 +319,11 @@ class EmailReplyListenerService {
         }
     }
 
-    async handleIncomingReply({ from, to = null, subject, body, rawText, messageId, inReplyTo = null, references = [], date = new Date() }) {
+    async handleIncomingReply({ from, to = null, subject, body, rawText, messageId, inReplyTo = null, references = [], date = null }) {
         const cleanFrom = extractEmailAddress(from);
         if (!cleanFrom) return null;
+        const parsedDate = date ? new Date(date) : null;
+        const receivedAt = parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : new Date();
 
         const mailboxOrgId = Number(process.env.IMAP_ORGANIZATION_ID || env.imap?.organizationId || 0) || null;
         const match = await followUpEngine.matchIncomingReply({
@@ -365,30 +369,40 @@ class EmailReplyListenerService {
         lead = await Lead.findById(lead.id, orgId) || lead;
 
         const classification = classifyInteractionIntent(body, { channel: "EMAIL", subject });
-        const outcome = classification.intent === "unsubscribe_or_dnc"
+        let replyClass = await classifyInboundReply(body, { subject });
+        if (classification.intent === "unsubscribe_or_dnc" && replyClass.intent !== REPLY_INTENTS.OPT_OUT) {
+            replyClass = { ...replyClass, intent: REPLY_INTENTS.OPT_OUT, route: REPLY_ROUTES.SUPPRESS, outcome: ASE_OUTCOMES.DNC };
+        }
+        const outcome = replyClass.intent === REPLY_INTENTS.OPT_OUT
             ? ASE_OUTCOMES.DNC
-            : (classification.outcome || normalizeChannelOutcome("EMAIL", {
+            : (replyClass.outcome || classification.outcome || normalizeChannelOutcome("EMAIL", {
                 reply: body,
                 transcript: body,
                 subject,
             }));
 
-        await OrchestratorService.handleOutcomeEvent(lead, outcome, {
-            channel: "EMAIL",
-            replyText: body,
-            subject,
-            from: cleanFrom,
-            messageId,
-            receivedAt: (date instanceof Date ? date : new Date(date)).toISOString(),
-            intent: classification,
-        });
-
         let enrollment = match.enrollment;
         if (!enrollment) {
             enrollment = await FollowUpEnrollment.findActiveByLeadId(lead.id, orgId);
         }
+
+        const recorded = await recordInboundReply({
+            lead,
+            orgId,
+            message: { messageId, from: cleanFrom, to, subject, body, inReplyTo, references, date: parsedDate },
+            classification: replyClass,
+            match,
+            enrollment,
+        });
+        if (recorded.duplicate) {
+            return { processed: true, duplicate: true, leadId: lead.id, outcome, inboundEmailId: recorded.inbound?.id || null };
+        }
+        messageId = recorded.messageId;
+
+        // The reply must pause the sequence before the orchestrator runs its handoff logic.
+        let replyResult = null;
         try {
-            await followUpEngine.handleLeadReply(
+            replyResult = await followUpEngine.handleLeadReply(
                 lead,
                 {
                     outcome,
@@ -397,13 +411,25 @@ class EmailReplyListenerService {
                     messageId,
                     inReplyTo,
                     references,
-                    date,
+                    date: receivedAt,
+                    inboundEmailId: recorded.inbound?.id || null,
+                    classification: replyClass,
                 },
                 enrollment || null
             );
         } catch (err) {
             this.logError("FOLLOWUP", `Error handling follow-up lead reply: ${err.message}`);
         }
+
+        await OrchestratorService.handleOutcomeEvent(lead, outcome, {
+            channel: "EMAIL",
+            replyText: body,
+            subject,
+            from: cleanFrom,
+            messageId,
+            receivedAt: receivedAt.toISOString(),
+            intent: classification,
+        });
 
         if (outcome === ASE_OUTCOMES.DNC) {
             await haltOutreachForLead(orgId, lead.id, "Prospect requested DNC by email reply").catch(() => {});
@@ -438,7 +464,7 @@ class EmailReplyListenerService {
                 messageId,
                 inReplyTo,
                 matchedBy: match.matchedBy || "SENDER_EMAIL",
-                receivedAt: (date instanceof Date ? date : new Date(date)).toISOString(),
+                receivedAt: receivedAt.toISOString(),
             },
             idempotency_key: `lead_${lead.id}_reply_${messageId || Date.now()}`,
         });
@@ -461,6 +487,10 @@ class EmailReplyListenerService {
             processed: true,
             leadId: lead.id,
             outcome,
+            intent: replyClass.intent,
+            inboundEmailId: recorded.inbound?.id || null,
+            draftId: replyResult?.draft?.id || null,
+            draftStatus: replyResult?.draft?.status || null,
             matchedBy: match.matchedBy,
         };
     }
