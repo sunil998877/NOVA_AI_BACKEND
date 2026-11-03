@@ -86,7 +86,36 @@ export async function getLeadApproval(orgId, leadId) {
 }
 
 export async function listApprovals(orgId, filters = {}) {
-    return AseApproval.list(orgId, filters);
+    const [items, counts] = await Promise.all([
+        AseApproval.list(orgId, filters),
+        AseApproval.countByStatus(orgId),
+    ]);
+    return { items, counts };
+}
+
+export async function rejectApprovalById(orgId, approvalId, userId, reason = "") {
+    const existing = await AseApproval.findById(orgId, approvalId);
+    if (!existing) {
+        throw Object.assign(new Error("Approval not found"), { status: 404 });
+    }
+    if (existing.status !== APPROVAL_STATUSES.PENDING && existing.status !== APPROVAL_STATUSES.HELD) {
+        return existing;
+    }
+    const approval = await AseApproval.review(orgId, approvalId, {
+        status: APPROVAL_STATUSES.REJECTED,
+        reviewedBy: userId,
+        payload: { reject_reason: String(reason || "").slice(0, 500) || "Rejected from approvals inbox" },
+    });
+    await LeadEvent.create({
+        organization_id: Number(orgId),
+        lead_id: existing.lead_id,
+        user_id: userId || null,
+        channel: "SYSTEM",
+        event_type: "APPROVAL_REJECTED",
+        status: APPROVAL_STATUSES.REJECTED,
+        payload: { approvalId: existing.id, action: existing.action_type, reason: reason || null },
+    }).catch(() => {});
+    return approval;
 }
 
 export async function prepareLeadApproval(orgId, leadId, userId, { actionType = null } = {}) {

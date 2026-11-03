@@ -259,6 +259,36 @@ export const OrchestratorService = {
         };
     },
 
+    async handleEmailClick(lead, data = {}) {
+        if (!lead || TERMINAL_STATES.includes(lead.status) || lead.do_not_contact) {
+            return { handled: false, reason: "Lead is terminal or DNC" };
+        }
+
+        const orgId = Number(lead.organization_id || 1);
+        if (lead.status === "CONTACTED" || lead.status === "NEW" || lead.status === "QUEUED") {
+            const transition = transitionLeadState(lead.status, "EMAIL_ENGAGED");
+            if (transition.changed) {
+                await Lead.updateById(lead.id, { status: transition.nextState }, orgId);
+                await eventBus.publish("LeadStateChanged", {
+                    organization_id: orgId,
+                    lead_id: lead.id,
+                    channel: "EMAIL",
+                    from_state: lead.status,
+                    to_state: transition.nextState,
+                    reason: "Lead clicked a link in outreach email",
+                    url: data.url || null,
+                    click_count: data.clickCount || null,
+                });
+                lead.status = transition.nextState;
+            }
+        }
+
+        return {
+            handled: true,
+            reason: "Email click recorded; engagement state updated when applicable",
+        };
+    },
+
     async schedulePostFirstEmailAction(lead) {
         if (!lead || TERMINAL_STATES.includes(lead.status) || lead.do_not_contact) {
             return { scheduled: false, reason: "Lead is terminal or DNC" };

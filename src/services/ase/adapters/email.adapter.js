@@ -8,14 +8,7 @@ import { LeadEvent } from "../../../models/lead-event.model.js";
 import { resolvePublicBaseUrl } from "../../../utils/publicBaseUrl.js";
 import { sanitizeOutreachEmail } from "../../../utils/outreachEmail.js";
 import { isSendableDraft, recordSentOutreach, toStoredOutreachEmail } from "../emailEngine/salesEmailEngine.service.js";
-
-function attachOpenPixel(html, leadId, token, baseUrl) {
-    const src = `${baseUrl}/api/tracking/open/ase/${leadId}?t=${token}`;
-    const pixel = `<img src="${src}" width="1" height="1" alt="" border="0" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;display:block;" />`;
-    const body = html || "";
-    if (/<\/body>/i.test(body)) return body.replace(/<\/body>/i, `${pixel}</body>`);
-    return `${body}${pixel}`;
-}
+import { prepareAseTrackedHtml } from "../aseEmailTracking.js";
 
 export class NovaEmailAdapter extends BaseChannelAdapter {
     constructor() {
@@ -115,7 +108,12 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
         const trackingBase = await resolvePublicBaseUrl();
         const sentEmail = { ...(outgoing || {}), subject, text: bodyText, html: bodyHtml };
         if (lead.id) {
-            bodyHtml = attachOpenPixel(bodyHtml, lead.id, openToken, trackingBase);
+            const tracked = prepareAseTrackedHtml(bodyHtml, {
+                leadId: lead.id,
+                token: openToken,
+                baseUrl: trackingBase,
+            });
+            bodyHtml = tracked.html;
             currentMeta = {
                 ...currentMeta,
                 company_research: companyResearch || currentMeta.company_research || null,
@@ -127,6 +125,7 @@ export class NovaEmailAdapter extends BaseChannelAdapter {
                 },
                 outreach_status: "ready",
                 outreach_open_token: openToken,
+                outreach_tracked_links: Number(tracked.linkCount || 0),
             };
             try {
                 await Lead.updateById(lead.id, { metadata: currentMeta }, lead.organization_id || 1);

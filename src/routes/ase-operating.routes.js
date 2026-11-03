@@ -10,6 +10,7 @@ import {
     holdById,
     holdLeadAction,
     listOrgApprovals,
+    rejectById,
     unholdLeadAction,
 } from "../controllers/Ase/approval.controller.js";
 import { getQueueStatus } from "../controllers/Ase/queue.controller.js";
@@ -66,6 +67,7 @@ router.post("/approvals/lead/:leadId/hold", authenticate, requireAseRole, holdLe
 router.post("/approvals/lead/:leadId/unhold", authenticate, requireAseRole, unholdLeadAction);
 router.post("/approvals/:id/approve", authenticate, requireAseRole, approveById);
 router.post("/approvals/:id/hold", authenticate, requireAseRole, holdById);
+router.post("/approvals/:id/reject", authenticate, requireAseRole, rejectById);
 
 router.get("/cadence/policies", authenticate, requireAseRole, listPolicies);
 router.get("/cadence/policies/default", authenticate, requireAseRole, getDefaultPolicy);
