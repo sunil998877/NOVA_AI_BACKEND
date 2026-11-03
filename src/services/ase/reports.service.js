@@ -56,6 +56,7 @@ export function assembleReport({
 } = {}) {
     const sent = eventCount(events, "EMAIL_SENT") + eventCount(events, "ActionDispatched", "EMAIL");
     const opened = eventCount(events, "EMAIL_OPENED");
+    const clicked = eventCount(events, "EMAIL_CLICKED");
     const replied = eventCount(events, "EMAIL_REPLY_RECEIVED");
     const callbacksQueued = eventCount(events, "CallbackCreated") + eventCount(events, "CALLBACK_CREATED");
     const completedCallbacks = Number(callbacks.completed || 0);
@@ -67,10 +68,12 @@ export function assembleReport({
         email: {
             sent,
             opened,
+            clicked,
             replied,
             interested: Number(interested || 0),
             meetings: Number(meetings || 0),
-            responseRate: pct(opened + replied, sent),
+            responseRate: pct(opened + clicked + replied, sent),
+            clickRate: pct(clicked, sent),
             interestRate: pct(interested, sent),
         },
         voice: {

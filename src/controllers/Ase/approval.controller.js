@@ -5,6 +5,7 @@ import {
     holdLeadApproval,
     listApprovals,
     prepareLeadApproval,
+    rejectApprovalById,
     reviewApprovalById,
     unholdLeadApproval,
 } from "../../services/ase/approvalQueue.service.js";
@@ -17,12 +18,18 @@ function httpError(err, res) {
 
 export const listOrgApprovals = asyncHandler(async (req, res) => {
     const orgId = Number(req.user?.organization_id || 1);
-    const items = await listApprovals(orgId, {
+    const result = await listApprovals(orgId, {
         status: req.query.status || APPROVAL_STATUSES.PENDING,
         leadId: req.query.lead_id ? Number(req.query.lead_id) : null,
         limit: req.query.limit,
     });
-    return res.status(200).json({ success: true, data: items });
+    return res.status(200).json({
+        success: true,
+        data: {
+            items: result.items || [],
+            counts: result.counts || {},
+        },
+    });
 });
 
 export const getLeadPendingApproval = asyncHandler(async (req, res) => {
@@ -41,6 +48,7 @@ export const approveLeadAction = asyncHandler(async (req, res) => {
         const result = await aseScheduler.processLeadAction(prepared.lead, {
             approved: true,
             force: true,
+            manual: true,
         });
         if (!result?.executed) {
             return res.status(400).json({
@@ -97,10 +105,17 @@ export const approveById = asyncHandler(async (req, res) => {
         const result = await aseScheduler.processLeadAction(prepared.lead, {
             approved: true,
             force: true,
+            manual: true,
         });
+        if (!result?.executed) {
+            return res.status(400).json({
+                error: result?.reason || "Approved action did not execute",
+                data: { approval: prepared.approval, executed: false },
+            });
+        }
         return res.status(200).json({
             success: true,
-            data: { approval: prepared.approval, executed: Boolean(result?.executed), action: result?.action },
+            data: { approval: prepared.approval, executed: true, action: result?.action },
         });
     } catch (err) {
         return httpError(err, res);
@@ -111,7 +126,27 @@ export const holdById = asyncHandler(async (req, res) => {
     const orgId = Number(req.user?.organization_id || 1);
     const userId = req.user?.id || null;
     try {
+        const existing = await AseApproval.findById(orgId, req.params.id);
+        if (!existing) return res.status(404).json({ error: "Approval not found" });
         const approval = await reviewApprovalById(orgId, req.params.id, userId, APPROVAL_STATUSES.HELD);
+        // Also park outreach so the scheduler does not keep re-queueing
+        await holdLeadApproval(orgId, existing.lead_id, userId).catch(() => {});
+        return res.status(200).json({ success: true, data: approval });
+    } catch (err) {
+        return httpError(err, res);
+    }
+});
+
+export const rejectById = asyncHandler(async (req, res) => {
+    const orgId = Number(req.user?.organization_id || 1);
+    const userId = req.user?.id || null;
+    try {
+        const approval = await rejectApprovalById(
+            orgId,
+            req.params.id,
+            userId,
+            req.body?.reason || ""
+        );
         return res.status(200).json({ success: true, data: approval });
     } catch (err) {
         return httpError(err, res);

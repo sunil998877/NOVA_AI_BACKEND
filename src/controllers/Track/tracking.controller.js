@@ -11,6 +11,7 @@ import { User } from "../../models/user.model.js";
 import { OrchestratorService } from "../../services/ase/orchestrator.service.js";
 import { detectEmailScanner } from "../../utils/emailScannerDetector.js";
 import { eventBus } from "../../services/ase/eventBus.service.js";
+import { isSafeRedirectUrl } from "../../services/ase/aseEmailTracking.js";
 
 const TRANSPARENT_GIF = Buffer.from(
   "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
@@ -77,6 +78,70 @@ export const trackAseOpen = asyncHandler(async (req, res) => {
     console.error("[TrackAseOpen] Error:", err.message);
   }
   return sendPixel(res);
+});
+
+export const trackAseClick = asyncHandler(async (req, res) => {
+  let redirectTo = "/";
+  try {
+    const leadId = Number(req.params.leadId);
+    const token = typeof req.query.t === "string" ? req.query.t : null;
+    const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
+    const userAgent = req.get("user-agent") || null;
+    const ipAddress = getClientIp(req);
+    const lead = leadId ? await Lead.findById(leadId) : null;
+    const storedToken = lead?.metadata?.outreach_open_token;
+    const tokenOk = Boolean(storedToken && token && token === storedToken);
+    const targetUrl = isSafeRedirectUrl(rawUrl) ? rawUrl : null;
+
+    if (targetUrl) redirectTo = targetUrl;
+
+    if (lead && tokenOk && targetUrl) {
+      const meta = { ...(typeof lead.metadata === "object" && lead.metadata ? lead.metadata : {}) };
+      const tracking = { ...(meta.tracking && typeof meta.tracking === "object" ? meta.tracking : {}) };
+      const nextClicks = Number(tracking.clicks || meta.link_clicks || 0) + 1;
+      const clickedAt = new Date().toISOString();
+      tracking.clicks = nextClicks;
+      tracking.last_clicked_at = clickedAt;
+      tracking.last_clicked_url = targetUrl;
+      meta.tracking = tracking;
+      meta.link_clicks = nextClicks;
+      meta.email_clicks = nextClicks;
+
+      await Lead.updateById(lead.id, { metadata: meta }, lead.organization_id || 1).catch(() => {});
+
+      await eventBus.publish("EMAIL_CLICKED", {
+        organization_id: lead.organization_id || 1,
+        lead_id: lead.id,
+        channel: "EMAIL",
+        status: "CLICKED",
+        source: "ASE_EMAIL_LINK",
+        payload: {
+          url: targetUrl,
+          user_agent: userAgent,
+          ip_address: ipAddress,
+          clicked_at: clickedAt,
+          click_count: nextClicks,
+        },
+        idempotency_key: `ase_click_${lead.id}_${nextClicks}`,
+      });
+
+      await OrchestratorService.handleEmailClick(lead, {
+        url: targetUrl,
+        userAgent,
+        ipAddress,
+        clickCount: nextClicks,
+      }).catch((err) => {
+        console.warn("[TrackAseClick] orchestrator:", err.message);
+      });
+
+      console.log(`[TrackAseClick] lead=${lead.id} clicks=${nextClicks} -> ${targetUrl}`);
+    }
+  } catch (err) {
+    console.error("[TrackAseClick] Error:", err.message);
+  }
+
+  res.set({ "Access-Control-Allow-Origin": "*" });
+  return res.redirect(302, redirectTo);
 });
 
 export const trackOpen = asyncHandler(async (req, res) => {
