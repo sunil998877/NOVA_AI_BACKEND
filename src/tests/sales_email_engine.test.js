@@ -194,11 +194,11 @@ describe("contact and conversation scenarios", () => {
         assert.match(result.text.toLowerCase(), /campaign|audience|engag/);
     });
 
-    test("4. Missing job title stays neutral and is flagged", async () => {
+    test("4. Missing job title stays neutral without a warning", async () => {
         const result = await composeSalesEmail(context(lead(104, { first: "Omar", company: "Quantiq", domain: "quantiq.io" }), software));
         assertProfessional(result);
         assert.equal(result.contact_role_context.titleKnown, false);
-        assert.ok(result.validation_warnings.includes("MISSING_JOB_TITLE"));
+        assert.equal(result.validation_warnings.includes("MISSING_JOB_TITLE"), false);
         assert.doesNotMatch(result.text, /as (a|the) (ceo|founder|head|manager)/i);
     });
 
