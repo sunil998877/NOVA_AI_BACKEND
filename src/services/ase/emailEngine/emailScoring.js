@@ -154,7 +154,6 @@ function scoreRoleRelevance(body, context, warnings) {
     const lower = body.toLowerCase();
     const hits = role.keywords.filter((keyword) => lower.includes(keyword)).length;
     if (!role.titleKnown) {
-        warnings.push("MISSING_JOB_TITLE");
         return hits ? 9 : 6;
     }
     if (hits >= 2) return 15;
